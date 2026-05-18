@@ -1,0 +1,36 @@
+- hosts: web
+  become: yes
+
+  tasks:
+
+    - name: Install Docker
+      yum:
+        name: docker
+        state: present
+
+    - name: Start Docker
+      service:
+        name: docker
+        state: started
+
+    - name: Enable Docker
+      service:
+        name: docker
+        enabled: yes
+
+    - name: Pull nginx
+      docker_image:
+        name: nginx
+        source: pull
+
+    - name: Run nginx
+      docker_container:
+        name: nginx
+        image: nginx
+        state: started
+        restart_policy: always
+        ports:
+          - "80:80"
+
+
+

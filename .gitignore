@@ -1,0 +1,34 @@
+# Terraform
+**/.terraform/
+*.tfstate
+*.tfstate.*
+*.tfplan
+*.tfvars
+.terraform.lock.hcl
+crash.log
+override.tf
+override.tf.json
+
+# Ansible
+ansible/inventory.ini
+ansible/*.pem
+*.retry
+
+# Secrets
+*.pem
+*.key
+*.ppk
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Logs
+*.log
+"terraform/.terraform/" 

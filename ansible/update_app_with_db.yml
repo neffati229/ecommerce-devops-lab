@@ -1,0 +1,97 @@
+---
+- name: Mettre à jour l'application avec MongoDB
+  hosts: web
+  become: yes
+  tasks:
+    - name: Créer nouvelle version de server.js avec MongoDB
+      copy:
+        content: |
+          const http = require('http');
+          const { MongoClient } = require('mongodb');
+          
+          const MONGODB_URI = process.env.MONGODB_URI || 'mongodb://admin:password@localhost:27017';
+          let db;
+          
+          async function connectDB() {
+            try {
+              const client = new MongoClient(MONGODB_URI);
+              await client.connect();
+              db = client.db('ecommerce');
+              console.log('✅ MongoDB connecté');
+              
+              // Créer collection produits si vide
+              const products = db.collection('products');
+              const count = await products.countDocuments();
+              if (count === 0) {
+                await products.insertMany([
+                  { name: "Laptop Pro", price: 1200, image: "💻" },
+                  { name: "Smartphone X", price: 800, image: "📱" },
+                  { name: "Casque Audio", price: 150, image: "🎧" }
+                ]);
+                console.log('📦 Produits par défaut ajoutés');
+              }
+            } catch (err) {
+              console.error('Erreur MongoDB:', err);
+            }
+          }
+          
+          const server = http.createServer(async (req, res) => {
+            if (req.url === '/api/products') {
+              try {
+                const products = db.collection('products');
+                const allProducts = await products.find({}).toArray();
+                res.writeHead(200, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify(allProducts));
+              } catch (err) {
+                res.writeHead(500);
+                res.end(JSON.stringify({ error: err.message }));
+              }
+            } else {
+              res.writeHead(200, { 'Content-Type': 'text/html' });
+              res.end(`
+                <!DOCTYPE html>
+                <html>
+                <head>
+                  <title>E-commerce Store</title>
+                  <style>
+                    body { font-family: Arial; margin: 40px; text-align: center; }
+                    .product { border: 1px solid #ddd; margin: 10px; padding: 10px; display: inline-block; width: 200px; }
+                    .price { color: green; font-weight: bold; }
+                  </style>
+                </head>
+                <body>
+                  <h1>🛍️ Boutique E-commerce</h1>
+                  <div id="products"></div>
+                  <script>
+                    fetch('/api/products')
+                      .then(r => r.json())
+                      .then(products => {
+                        document.getElementById('products').innerHTML = 
+                          products.map(p => 
+                            \`<div class="product">
+                              <div>\${p.image}</div>
+                              <h3>\${p.name}</h3>
+                              <div class="price">\${p.price}€</div>
+                             </div>\`
+                          ).join('');
+                      });
+                  </script>
+                </body>
+                </html>
+              `);
+            }
+          });
+          
+          connectDB().then(() => {
+            server.listen(3000, () => {
+              console.log('🚀 E-commerce sur port 3000');
+            });
+          });
+        dest: /opt/ecommerce/app/server.js
+        owner: appuser
+        group: appuser
+        mode: '0644'
+
+    - name: Redémarrer l'application
+      command: /usr/local/bin/pm2 restart ecommerce-app
+      become_user: appuser

@@ -1,0 +1,55 @@
+---
+- name: Correction PM2
+  hosts: web
+  become: yes
+  vars:
+    app_user: appuser
+    app_dir: /opt/ecommerce
+
+  tasks:
+    - name: Vérifier l'emplacement de PM2
+      command: which pm2
+      register: pm2_path
+      ignore_errors: yes
+
+    - name: Afficher PM2 path
+      debug:
+        msg: "PM2 trouvé: {{ pm2_path.stdout }}"
+
+    - name: Ajouter npm global au PATH pour appuser
+      lineinfile:
+        path: /home/{{ app_user }}/.bashrc
+        line: 'export PATH=/usr/local/bin:$PATH'
+        create: yes
+
+    - name: Démarrer l'application avec PM2 (chemin absolu)
+      command: /usr/local/bin/pm2 start server.js --name ecommerce-app
+      args:
+        chdir: "{{ app_dir }}/app"
+      become_user: "{{ app_user }}"
+
+    - name: Sauvegarder PM2
+      command: /usr/local/bin/pm2 save
+      become_user: "{{ app_user }}"
+
+    - name: Configurer PM2 au démarrage
+      command: /usr/local/bin/pm2 startup
+      become_user: "{{ app_user }}"
+      ignore_errors: yes
+
+    - name: Démarrer Nginx
+      service:
+        name: nginx
+        state: started
+        enabled: yes
+
+    - name: Vérifier l'application
+      uri:
+        url: http://localhost:3000
+        return_content: yes
+      register: app_check
+
+    - name: Afficher vérification
+      debug:
+        msg: "Application accessible sur le port 3000"
+      when: app_check.status == 200

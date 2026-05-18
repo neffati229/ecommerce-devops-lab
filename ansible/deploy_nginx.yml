@@ -1,0 +1,84 @@
+---
+- name: Configuration finale Nginx
+  hosts: web
+  become: yes
+  vars:
+    app_user: appuser
+    app_dir: /opt/ecommerce
+
+  tasks:
+    - name: Installer Nginx
+      yum:
+        name: nginx
+        state: present
+
+    - name: Démarrer et activer Nginx
+      systemd:
+        name: nginx
+        state: started
+        enabled: yes
+
+    - name: Configurer Nginx comme reverse proxy
+      copy:
+        content: |
+          server {
+              listen 80;
+              server_name _;
+              
+              location / {
+                  proxy_pass http://localhost:3000;
+                  proxy_http_version 1.1;
+                  proxy_set_header Upgrade $http_upgrade;
+                  proxy_set_header Connection 'upgrade';
+                  proxy_set_header Host $host;
+                  proxy_cache_bypass $http_upgrade;
+                  proxy_set_header X-Real-IP $remote_addr;
+                  proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+              }
+          }
+        dest: /etc/nginx/conf.d/ecommerce.conf
+      notify: restart nginx
+
+    - name: Tester la configuration Nginx
+      command: nginx -t
+      register: nginx_test
+
+    - name: Afficher test Nginx
+      debug:
+        msg: "Configuration Nginx valide"
+      when: nginx_test.rc == 0
+
+    - name: Configurer PM2 au démarrage (commande suggérée)
+      shell: |
+        sudo env PATH=$PATH:/usr/local/bin /usr/local/lib/node_modules/pm2/bin/pm2 startup systemd -u {{ app_user }} --hp /home/{{ app_user }}
+      become_user: "{{ app_user }}"
+      ignore_errors: yes
+
+    - name: Sauvegarder l'état PM2
+      command: /usr/local/bin/pm2 save
+      become_user: "{{ app_user }}"
+
+    - name: Vérifier l'application sur port 80
+      uri:
+        url: http://localhost
+        return_content: yes
+        status_code: 200
+      register: app_http
+      retries: 3
+      delay: 5
+
+    - name: Afficher succès
+      debug:
+        msg: |
+          ====================================
+          ✅ DÉPLOIEMENT RÉUSSI ! ✅
+          ====================================
+          Application accessible sur:
+          http://{{ ansible_default_ipv4.address }}
+          ====================================
+
+  handlers:
+    - name: restart nginx
+      systemd:
+        name: nginx
+        state: restarted

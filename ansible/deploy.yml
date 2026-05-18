@@ -1,0 +1,34 @@
+---
+- name: Déploiement initial du serveur web
+  hosts: web
+  become: yes
+  gather_facts: yes
+  tasks:
+    - name: Mettre à jour les paquets avec yum
+      command: sudo yum update -y
+      register: yum_update
+      changed_when: '"No packages marked for update" not in yum_update.stdout'
+
+    - name: Installer les paquets essentiels avec yum
+      command: sudo yum install -y git curl vim
+      register: yum_install
+      changed_when: '"Nothing to do" not in yum_install.stdout'
+
+    - name: Créer un utilisateur pour l'application
+      user:
+        name: appuser
+        state: present
+        create_home: yes
+        shell: /bin/bash
+
+    - name: Créer le répertoire de l'application
+      file:
+        path: /opt/ecommerce
+        state: directory
+        owner: appuser
+        group: appuser
+        mode: '0755'
+
+    - name: Afficher les informations système
+      debug:
+        msg: "Déploiement sur {{ ansible_host }} ({{ ansible_distribution }} {{ ansible_distribution_version }})"

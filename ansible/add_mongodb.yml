@@ -1,0 +1,35 @@
+---
+- name: Installer MongoDB
+  hosts: web
+  become: yes
+  tasks:
+    - name: Ajouter le dépôt MongoDB
+      copy:
+        content: |
+          [mongodb-org-4.2]
+          name=MongoDB Repository
+          baseurl=https://repo.mongodb.org/yum/amazon/2/mongodb-org/4.2/x86_64/
+          gpgcheck=1
+          enabled=1
+          gpgkey=https://www.mongodb.org/static/pgp/server-4.2.asc
+        dest: /etc/yum.repos.d/mongodb-org-4.2.repo
+
+    - name: Installer MongoDB
+      yum:
+        name: mongodb-org
+        state: present
+
+    - name: Démarrer MongoDB
+      systemd:
+        name: mongod
+        state: started
+        enabled: yes
+
+    - name: Vérifier MongoDB
+      command: mongo --eval "db.version()"
+      register: mongo_version
+      ignore_errors: yes
+
+    - name: Afficher version
+      debug:
+        msg: "MongoDB installé: {{ mongo_version.stdout }}"

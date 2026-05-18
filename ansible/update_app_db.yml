@@ -1,0 +1,106 @@
+---
+- name: Mettre à jour l'application avec MongoDB
+  hosts: web
+  become: yes
+  tasks:
+    - name: Installer driver MongoDB (version compatible Node 16)
+      shell: |
+        cd /opt/ecommerce/app
+        sudo -u appuser npm install mongodb@4.0.0
+      ignore_errors: yes
+
+    - name: Mettre à jour server.js
+      copy:
+        content: |
+          const http = require('http');
+          const { MongoClient } = require('mongodb');
+          
+          const MONGODB_URI = 'mongodb://localhost:27017';
+          let db;
+          
+          async function connectDB() {
+            try {
+              const client = new MongoClient(MONGODB_URI);
+              await client.connect();
+              db = client.db('ecommerce');
+              console.log('✅ MongoDB connecté');
+              
+              const products = db.collection('products');
+              const count = await products.countDocuments();
+              if (count === 0) {
+                await products.insertMany([
+                  { name: "Laptop Pro", price: 1200, image: "💻" },
+                  { name: "Smartphone X", price: 800, image: "📱" },
+                  { name: "Casque Audio", price: 150, image: "🎧" }
+                ]);
+                console.log('📦 Produits par défaut ajoutés');
+              }
+            } catch (err) {
+              console.error('MongoDB non disponible:', err.message);
+            }
+          }
+          
+          const server = http.createServer(async (req, res) => {
+            if (req.url === '/api/products') {
+              try {
+                const products = db.collection('products');
+                const allProducts = await products.find({}).toArray();
+                res.writeHead(200, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify(allProducts));
+              } catch (err) {
+                res.writeHead(200, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify([{ name: "Mode démo", price: 0, image: "⚠️" }]));
+              }
+            } else {
+              res.writeHead(200, { 'Content-Type': 'text/html' });
+              res.end(`
+                <!DOCTYPE html>
+                <html>
+                <head><title>E-commerce Store</title>
+                <style>
+                  body { font-family: Arial; margin: 40px; text-align: center; }
+                  .product { border: 1px solid #ddd; margin: 10px; padding: 10px; display: inline-block; width: 200px; border-radius: 5px; }
+                  .price { color: green; font-weight: bold; }
+                  .container { max-width: 800px; margin: auto; }
+                </style>
+                </head>
+                <body>
+                  <div class="container">
+                    <h1>🛍️ Boutique E-commerce</h1>
+                    <div id="products"></div>
+                    <hr>
+                    <small>DevOps IaaS - MongoDB intégré</small>
+                  </div>
+                  <script>
+                    fetch('/api/products')
+                      .then(r => r.json())
+                      .then(products => {
+                        document.getElementById('products').innerHTML = 
+                          products.map(p => 
+                            \`<div class="product">
+                              <div style="font-size:48px">\${p.image}</div>
+                              <h3>\${p.name}</h3>
+                              <div class="price">\${p.price}€</div>
+                             </div>\`
+                          ).join('');
+                      });
+                  </script>
+                </body>
+                </html>
+              `);
+            }
+          });
+          
+          connectDB().then(() => {
+            server.listen(3000, () => {
+              console.log('🚀 E-commerce sur port 3000');
+            });
+          });
+        dest: /opt/ecommerce/app/server.js
+        owner: appuser
+        group: appuser
+        mode: '0644'
+
+    - name: Redémarrer application
+      command: /usr/local/bin/pm2 restart ecommerce-app
+      become_user: appuser

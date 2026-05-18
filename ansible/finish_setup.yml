@@ -1,0 +1,60 @@
+---
+- name: Finaliser l'installation
+  hosts: web
+  become: yes
+  tasks:
+    - name: Vérifier Docker
+      command: docker --version
+      register: docker_version
+      ignore_errors: yes
+
+    - name: Afficher version Docker
+      debug:
+        msg: "Docker installé: {{ docker_version.stdout }}"
+
+    - name: Installer Nginx
+      shell: |
+        sudo amazon-linux-extras install nginx1 -y
+        sudo systemctl start nginx
+        sudo systemctl enable nginx
+
+    - name: Configurer Nginx reverse proxy
+      copy:
+        content: |
+          server {
+              listen 80;
+              server_name _;
+              location / {
+                  proxy_pass http://localhost:3000;
+                  proxy_http_version 1.1;
+                  proxy_set_header Host $host;
+              }
+          }
+        dest: /etc/nginx/conf.d/ecommerce.conf
+
+    - name: Redémarrer Nginx
+      systemd:
+        name: nginx
+        state: restarted
+        enabled: yes
+
+    - name: Vérifier l'application Node.js
+      uri:
+        url: http://localhost:3000
+        return_content: yes
+        status_code: 200
+      register: app
+      ignore_errors: yes
+
+    - name: Afficher statut
+      debug:
+        msg: |
+          ========================================
+          ✅ DÉPLOIEMENT RÉUSSI ! ✅
+          ========================================
+          Application accessible sur:
+          http://{{ ansible_default_ipv4.address }}
+          ========================================
+          Version Node.js: {{ app.content | regex_search('Node\.js: [0-9.]+') | default('inconnue') }}
+          ========================================
+      when: app.status == 200

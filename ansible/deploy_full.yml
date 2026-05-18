@@ -1,0 +1,128 @@
+---
+- name: Déploiement complet e-commerce
+  hosts: web
+  become: yes
+  tasks:
+    - name: Créer l'utilisateur appuser
+      user:
+        name: appuser
+        state: present
+        create_home: yes
+        shell: /bin/bash
+
+    - name: Installer Docker
+      shell: |
+        amazon-linux-extras install docker -y
+        systemctl start docker
+        systemctl enable docker
+        usermod -aG docker ec2-user
+        usermod -aG docker appuser
+
+    - name: Installer Docker Compose
+      get_url:
+        url: https://github.com/docker/compose/releases/download/v2.24.0/docker-compose-linux-x86_64
+        dest: /usr/local/bin/docker-compose
+        mode: '0755'
+
+    - name: Installer Node.js 16
+      shell: |
+        curl -fsSL https://rpm.nodesource.com/setup_16.x | bash -
+        yum install -y nodejs
+
+    - name: Installer PM2
+      npm:
+        name: pm2
+        global: yes
+
+    - name: Créer le répertoire de l'application
+      file:
+        path: /opt/ecommerce/app
+        state: directory
+        owner: appuser
+        group: appuser
+        mode: '0755'
+
+    - name: Créer l'application Node.js
+      copy:
+        content: |
+          const http = require('http');
+          const server = http.createServer((req, res) => {
+            res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+            res.end(`
+              <!DOCTYPE html>
+              <html>
+              <head><title>E-commerce Store</title>
+              <style>
+                body { font-family: Arial; margin: 40px; text-align: center; }
+                h1 { color: #e67e22; }
+                .success { color: green; }
+              </style>
+              </head>
+              <body>
+                <h1>🛍️ Boutique E-commerce</h1>
+                <p class="success">✓ Déploiement réussi avec Ansible !</p>
+                <p>Serveur: ${require('os').hostname()}</p>
+                <p>Node.js: ${process.version}</p>
+                <hr>
+                <small>DevOps IaaS - Projet complet</small>
+              </body>
+              </html>
+            `);
+          });
+          server.listen(3000, () => console.log('App running on port 3000'));
+        dest: /opt/ecommerce/app/server.js
+        owner: appuser
+        group: appuser
+        mode: '0755'
+
+    - name: Initialiser npm
+      command: npm init -y
+      args:
+        chdir: /opt/ecommerce/app
+      become_user: appuser
+
+    - name: Démarrer l'application avec PM2
+      command: pm2 start server.js --name ecommerce-app
+      args:
+        chdir: /opt/ecommerce/app
+      become_user: appuser
+
+    - name: Sauvegarder PM2
+      command: pm2 save
+      become_user: appuser
+
+    - name: Installer Nginx
+      yum:
+        name: nginx
+        state: present
+
+    - name: Configurer Nginx
+      copy:
+        content: |
+          server {
+              listen 80;
+              server_name _;
+              location / {
+                  proxy_pass http://localhost:3000;
+                  proxy_http_version 1.1;
+                  proxy_set_header Host $host;
+              }
+          }
+        dest: /etc/nginx/conf.d/ecommerce.conf
+
+    - name: Démarrer Nginx
+      service:
+        name: nginx
+        state: started
+        enabled: yes
+
+    - name: Vérifier l'application
+      uri:
+        url: http://localhost:3000
+        status_code: 200
+      register: app_check
+      ignore_errors: yes
+
+    - name: Afficher résultat
+      debug:
+        msg: "Application déployée sur http://{{ ansible_default_ipv4.address }}"
