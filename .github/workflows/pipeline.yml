@@ -1,0 +1,70 @@
+name: Full DevOps Pipeline
+
+on:
+  push:
+    branches: [ "main" ]
+  workflow_dispatch:
+
+jobs:
+  terraform:
+    name: Provision Infrastructure
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: terraform
+    outputs:
+      instance_ips: ${{ steps.export.outputs.instance_ips }}
+    
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ secrets.AWS_REGION }}
+          
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        
+      - name: Terraform Init
+        run: terraform init
+        
+      - name: Terraform Apply
+        run: terraform apply -auto-approve
+        
+      - name: Export Instance IPs
+        id: export
+        run: |
+          IPS=$(terraform output -json instance_public_ips 2>/dev/null | jq -r '.[]' | tr '\n' ' ')
+          echo "instance_ips=$IPS" >> $GITHUB_OUTPUT
+
+  ansible:
+    name: Configure Servers
+    runs-on: ubuntu-latest
+    needs: terraform
+    if: needs.terraform.outputs.instance_ips != ''
+    
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Install Ansible
+        run: sudo apt update && sudo apt install -y ansible jq
+        
+      - name: Setup SSH Key
+        run: |
+          echo "${{ secrets.EC2_KEY }}" > key.pem
+          chmod 600 key.pem
+          
+      - name: Generate Inventory
+        run: |
+          echo "[web]" > inventory.ini
+          for ip in ${{ needs.terraform.outputs.instance_ips }}; do
+            echo "$ip ansible_user=ec2-user ansible_ssh_private_key_file=key.pem" >> inventory.ini
+          done
+          
+      - name: Run Ansible Playbook
+        run: ansible-playbook -i inventory.ini ansible/deploy_full.yml
+        env:
+          ANSIBLE_HOST_KEY_CHECKING: "False"
