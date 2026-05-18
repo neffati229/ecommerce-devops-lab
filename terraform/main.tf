@@ -1,5 +1,5 @@
 resource "aws_security_group" "web_sg" {
-  name        = "web_sg"
+  name_prefix = "web_sg-"
   description = "Security group for web server"
 
   ingress {
