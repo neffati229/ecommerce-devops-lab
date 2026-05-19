@@ -1,0 +1,18 @@
+---
+- name: Ajouter des produits dans MongoDB
+  hosts: web
+  become: yes
+  tasks:
+    - name: Ajouter les produits
+      command: docker exec -i mongodb mongosh --eval "
+        use ecommerce;
+        db.products.insertMany([
+          { name: 'Laptop Pro', price: 1200, image: '💻', stock: 15 },
+          { name: 'Smartphone X', price: 800, image: '📱', stock: 23 },
+          { name: 'Casque Audio', price: 150, image: '🎧', stock: 42 }
+        ]);
+      "
+      ignore_errors: yes
+
+    - name: Redémarrer l'application
+      command: sudo -u appuser pm2 restart ecommerce-app
