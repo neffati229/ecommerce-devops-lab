@@ -24,7 +24,6 @@ jobs:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: ${{ secrets.AWS_REGION }}
-          aws-session-token: ${{ secrets.AWS_SESSION_TOKEN }}
           
       - name: Setup Terraform
         uses: hashicorp/setup-terraform@v3
@@ -64,7 +63,7 @@ jobs:
         run: |
           echo "[web]" > inventory.ini
           for ip in ${{ needs.terraform.outputs.instance_ips }}; do
-            echo "$ip ansible_user=ec2-user ansible_ssh_private_key_file=key.pem" >> inventory.ini
+            echo "$ip ansible_user=ubuntu ansible_ssh_private_key_file=key.pem" >> inventory.ini
           done
           cat inventory.ini
           
