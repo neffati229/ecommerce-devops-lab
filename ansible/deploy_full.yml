@@ -348,4 +348,4 @@
 
     - name: Afficher URL
       debug:
-        msg: "Application deployee sur http://{{ ansible_default_ipv4.address }}"
+        msg: "Application deployee sur http://{{ ansible_default_ipv4.address }}"# v2
