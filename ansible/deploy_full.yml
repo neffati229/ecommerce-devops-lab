@@ -5,6 +5,7 @@
   vars:
     app_user: appuser
     app_dir: /opt/ecommerce
+    ansible_python_interpreter: /usr/bin/python3
 
   tasks:
     - name: Créer l'utilisateur appuser
@@ -41,29 +42,17 @@
         - ubuntu
         - "{{ app_user }}"
 
-    - name: Lancer MongoDB
-      docker_container:
-        name: mongodb
-        image: mongo:5.0
-        restart_policy: always
-        ports:
-          - "27017:27017"
-
-    - name: Attendre que MongoDB soit prêt
-      wait_for:
-        port: 27017
-        host: 127.0.0.1
-        delay: 5
-        timeout: 60
-
     - name: Installer Node.js 18
       shell: |
         curl -fsSL https://deb.nodesource.com/setup_18.x | sudo -E bash -
         apt install -y nodejs
-      args:
-        executable: /bin/bash
 
-    - name: Installer PM2 globalement
+    - name: Installer sqlite3 système
+      apt:
+        name: sqlite3
+        state: present
+
+    - name: Installer PM2
       npm:
         name: pm2
         global: yes
@@ -76,235 +65,204 @@
         group: "{{ app_user }}"
         mode: '0755'
 
-    - name: Créer l'application Node.js avec MongoDB
+    - name: Supprimer ancien server.js
+      file:
+        path: "{{ app_dir }}/app/server.js"
+        state: absent
+
+    - name: Supprimer ancien package.json
+      file:
+        path: "{{ app_dir }}/app/package.json"
+        state: absent
+
+    - name: Supprimer ancienne base de données
+      file:
+        path: "{{ app_dir }}/app/products.db"
+        state: absent
+
+    - name: Créer package.json avec sqlite3
       copy:
+        content: |
+          {
+            "name": "ecommerce-app",
+            "version": "1.0.0",
+            "main": "server.js",
+            "dependencies": {
+              "sqlite3": "^5.1.6"
+            }
+          }
+        dest: "{{ app_dir }}/app/package.json"
+        owner: "{{ app_user }}"
+        group: "{{ app_user }}"
+        mode: '0644'
+
+    - name: Installer les dépendances npm
+      shell: |
+        cd "{{ app_dir }}/app"
+        npm install
+        chown -R {{ app_user }}:{{ app_user }} .
+
+    - name: Créer l'application Node.js avec SQLite
+      copy:
+        content: |
+          const http = require('http');
+          const sqlite3 = require('sqlite3').verbose();
+          const path = require('path');
+          const os = require('os');
+
+          // Connexion base de données
+          const db = new sqlite3.Database(path.join(__dirname, 'products.db'));
+
+          // Créer table et insérer produits
+          db.serialize(() => {
+            db.run(`CREATE TABLE IF NOT EXISTS products (
+              id INTEGER PRIMARY KEY AUTOINCREMENT,
+              name TEXT NOT NULL,
+              price REAL NOT NULL,
+              emoji TEXT,
+              description TEXT
+            )`);
+
+            db.get("SELECT COUNT(*) as count FROM products", (err, row) => {
+              if (!err && row.count === 0) {
+                const stmt = db.prepare("INSERT INTO products (name, price, emoji, description) VALUES (?, ?, ?, ?)");
+                stmt.run("Laptop Pro", 1299.99, "💻", "Ordinateur haute performance");
+                stmt.run("Smartphone X", 799.99, "📱", "Dernier modèle disponible");
+                stmt.run("Casque Audio", 199.99, "🎧", "Son haute fidélité");
+                stmt.finalize();
+                console.log("Produits insérés en base de données");
+              }
+            });
+          });
+
+          const server = http.createServer((req, res) => {
+
+            // API JSON
+            if (req.url === '/api/products') {
+              db.all("SELECT * FROM products", (err, rows) => {
+                if (err) {
+                  res.writeHead(500, { 'Content-Type': 'application/json' });
+                  res.end(JSON.stringify({ error: err.message }));
+                } else {
+                  res.writeHead(200, { 'Content-Type': 'application/json' });
+                  res.end(JSON.stringify(rows));
+                }
+              });
+
+            // Page HTML
+            } else {
+              res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+              res.end(`
+                <!DOCTYPE html>
+                <html>
+                <head>
+                  <title>Boutique E-commerce</title>
+                  <style>
+                    * { box-sizing: border-box; margin: 0; padding: 0; }
+                    body { font-family: Arial, sans-serif; background: #f5f5f5; padding: 40px 20px; }
+                    h1 { color: #e67e22; text-align: center; font-size: 2em; margin-bottom: 10px; }
+                    .subtitle { color: green; text-align: center; margin-bottom: 5px; }
+                    .info { text-align: center; color: #888; font-size: 0.85em; margin-bottom: 30px; }
+                    .products {
+                      display: flex;
+                      justify-content: center;
+                      gap: 24px;
+                      flex-wrap: wrap;
+                      margin-top: 20px;
+                    }
+                    .card {
+                      background: white;
+                      border-radius: 12px;
+                      padding: 24px 20px;
+                      width: 220px;
+                      text-align: center;
+                      box-shadow: 0 4px 12px rgba(0,0,0,0.1);
+                      transition: transform 0.2s;
+                    }
+                    .card:hover { transform: translateY(-4px); }
+                    .emoji { font-size: 56px; margin-bottom: 12px; }
+                    .card h3 { color: #333; margin-bottom: 6px; font-size: 1.1em; }
+                    .desc { color: #999; font-size: 0.82em; margin-bottom: 10px; }
+                    .price { color: #e67e22; font-weight: bold; font-size: 1.3em; margin-bottom: 14px; }
+                    .btn {
+                      background: #e67e22;
+                      color: white;
+                      border: none;
+                      padding: 10px 18px;
+                      border-radius: 6px;
+                      cursor: pointer;
+                      font-size: 0.95em;
+                      width: 100%;
+                    }
+                    .btn:hover { background: #d35400; }
+                    footer { text-align: center; margin-top: 50px; color: #bbb; font-size: 0.8em; }
+                    .loading { text-align: center; color: #888; margin-top: 40px; }
+                    .error { text-align: center; color: red; margin-top: 40px; }
+                  </style>
+                </head>
+                <body>
+                  <h1>🛍️ Boutique E-commerce</h1>
+                  <p class="subtitle">✓ Déploiement réussi avec Ansible !</p>
+                  <p class="info">Serveur: ${os.hostname()} | Node.js: ${process.version}</p>
+
+                  <div class="products" id="products">
+                    <p class="loading">⏳ Chargement des produits depuis la base de données...</p>
+                  </div>
+
+                  <footer>
+                    <hr style="margin-bottom:10px;">
+                    DevOps IaaS - Projet complet
+                  </footer>
+
+                  <script>
+                    fetch('/api/products')
+                      .then(res => res.json())
+                      .then(products => {
+                        const container = document.getElementById('products');
+                        if (products.length === 0) {
+                          container.innerHTML = '<p class="error">Aucun produit trouvé.</p>';
+                          return;
+                        }
+                        container.innerHTML = products.map(p => \`
+                          <div class="card">
+                            <div class="emoji">\${p.emoji}</div>
+                            <h3>\${p.name}</h3>
+                            <div class="desc">\${p.description}</div>
+                            <div class="price">\${p.price.toFixed(2)} €</div>
+                            <button class="btn">🛒 Ajouter au panier</button>
+                          </div>
+                        \`).join('');
+                      })
+                      .catch(() => {
+                        document.getElementById('products').innerHTML =
+                          '<p class="error">❌ Erreur lors du chargement des produits.</p>';
+                      });
+                  </script>
+                </body>
+                </html>
+              `);
+            }
+          });
+
+          server.listen(3000, () => console.log('App e-commerce running on port 3000'));
         dest: "{{ app_dir }}/app/server.js"
         owner: "{{ app_user }}"
         group: "{{ app_user }}"
         mode: '0755'
-        content: |
-          const http = require('http');
-          const { MongoClient } = require('mongodb');
-          const os = require('os');
 
-          const MONGODB_URI = 'mongodb://localhost:27017';
-          let db;
+    - name: Arrêter PM2 si déjà lancé
+      shell: pm2 delete ecommerce-app || true
+      become_user: "{{ app_user }}"
 
-          async function connectDB() {
-            try {
-              const client = new MongoClient(MONGODB_URI, { serverSelectionTimeoutMS: 10000 });
-              await client.connect();
-              db = client.db('ecommerce');
-              console.log('MongoDB connecte');
-              const products = db.collection('products');
-              const count = await products.countDocuments();
-              if (count === 0) {
-                await products.insertMany([
-                  { name: "Laptop Pro",      price: 1200, image: "💻", stock: 15, category: "Ordinateurs"  },
-                  { name: "Smartphone X",    price: 800,  image: "📱", stock: 23, category: "Smartphones"  },
-                  { name: "Casque Audio",    price: 150,  image: "🎧", stock: 42, category: "Audio"        },
-                  { name: "Montre Connect.", price: 350,  image: "⌚", stock: 10, category: "Accessoires"  },
-                  { name: "Tablette Z",      price: 600,  image: "📟", stock: 8,  category: "Ordinateurs"  },
-                  { name: "Enceinte BT",     price: 90,   image: "🔊", stock: 30, category: "Audio"        }
-                ]);
-                console.log('Produits inseres en base');
-              }
-            } catch (err) {
-              console.error('Erreur MongoDB:', err.message);
-            }
-          }
-
-          const HTML = `<!DOCTYPE html>
-          <html lang="fr">
-          <head>
-            <meta charset="UTF-8">
-            <meta name="viewport" content="width=device-width, initial-scale=1.0">
-            <title>Boutique E-commerce</title>
-            <style>
-              * { margin: 0; padding: 0; box-sizing: border-box; }
-              body { font-family: 'Segoe UI', sans-serif; background: #f0f2f5; min-height: 100vh; }
-              header { background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; padding: 20px 40px; display: flex; align-items: center; justify-content: space-between; box-shadow: 0 4px 15px rgba(0,0,0,0.2); flex-wrap: wrap; gap: 10px; }
-              header h1 { font-size: 1.8em; }
-              .search-bar { display: flex; gap: 10px; }
-              .search-bar input { padding: 10px 20px; border-radius: 25px; border: none; width: 260px; font-size: 1em; outline: none; }
-              .search-bar button { padding: 10px 20px; border-radius: 25px; border: none; background: #ff6b35; color: white; font-weight: bold; cursor: pointer; }
-              .search-bar button:hover { background: #e55a26; }
-              .cart-icon { font-size: 1.5em; cursor: pointer; position: relative; }
-              .cart-count { background: #ff6b35; color: white; border-radius: 50%; padding: 2px 7px; font-size: 0.6em; position: absolute; top: -8px; right: -10px; }
-              .layout { display: flex; max-width: 1300px; margin: 30px auto; gap: 25px; padding: 0 20px; }
-              .sidebar { width: 220px; flex-shrink: 0; }
-              .sidebar .card { background: white; border-radius: 12px; padding: 20px; box-shadow: 0 2px 10px rgba(0,0,0,0.08); }
-              .sidebar h3 { color: #333; margin-bottom: 15px; font-size: 1em; text-transform: uppercase; letter-spacing: 1px; }
-              .category-btn { display: block; width: 100%; text-align: left; padding: 10px 15px; margin: 5px 0; border-radius: 8px; border: none; background: #f8f9fa; cursor: pointer; font-size: 0.95em; color: #555; transition: all 0.2s; }
-              .category-btn:hover, .category-btn.active { background: linear-gradient(135deg, #667eea, #764ba2); color: white; }
-              .main { flex: 1; }
-              .products-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 20px; }
-              .product-card { background: white; border-radius: 12px; padding: 20px; text-align: center; box-shadow: 0 2px 10px rgba(0,0,0,0.08); transition: transform 0.3s, box-shadow 0.3s; }
-              .product-card:hover { transform: translateY(-6px); box-shadow: 0 8px 25px rgba(0,0,0,0.15); }
-              .product-image { font-size: 56px; margin-bottom: 12px; }
-              .product-name { font-size: 1em; font-weight: bold; color: #333; margin-bottom: 6px; }
-              .product-stock { font-size: 0.8em; color: #27ae60; margin-bottom: 10px; }
-              .product-price { color: #e67e22; font-weight: bold; font-size: 1.3em; margin-bottom: 15px; }
-              .btn-add { width: 100%; padding: 10px; border-radius: 8px; border: none; background: linear-gradient(135deg, #667eea, #764ba2); color: white; font-weight: bold; cursor: pointer; transition: opacity 0.2s; }
-              .btn-add:hover { opacity: 0.85; }
-              .cart-panel { position: fixed; right: -380px; top: 0; width: 380px; height: 100vh; background: white; box-shadow: -5px 0 20px rgba(0,0,0,0.15); transition: right 0.3s; z-index: 1000; display: flex; flex-direction: column; }
-              .cart-panel.open { right: 0; }
-              .cart-header { padding: 20px; background: linear-gradient(135deg, #667eea, #764ba2); color: white; display: flex; justify-content: space-between; align-items: center; }
-              .cart-close { background: none; border: none; color: white; font-size: 1.5em; cursor: pointer; }
-              .cart-items { flex: 1; overflow-y: auto; padding: 15px; }
-              .cart-item { display: flex; align-items: center; gap: 12px; padding: 12px; border-bottom: 1px solid #eee; }
-              .cart-item-img { font-size: 2em; }
-              .cart-item-info { flex: 1; }
-              .cart-item-name { font-weight: bold; font-size: 0.95em; }
-              .cart-item-price { color: #e67e22; font-size: 0.9em; }
-              .cart-item-qty { display: flex; align-items: center; gap: 8px; }
-              .qty-btn { width: 26px; height: 26px; border-radius: 50%; border: 1px solid #ddd; background: #f8f9fa; cursor: pointer; }
-              .cart-footer { padding: 20px; border-top: 2px solid #eee; }
-              .cart-total { font-size: 1.3em; font-weight: bold; margin-bottom: 15px; display: flex; justify-content: space-between; }
-              .btn-order { width: 100%; padding: 15px; border-radius: 10px; border: none; background: linear-gradient(135deg, #f093fb, #f5576c); color: white; font-size: 1.1em; font-weight: bold; cursor: pointer; }
-              .overlay { display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.4); z-index: 999; }
-              .overlay.open { display: block; }
-              .empty-cart { text-align: center; padding: 40px; color: #aaa; }
-              footer { text-align: center; padding: 25px; color: #888; font-size: 0.9em; margin-top: 40px; border-top: 1px solid #ddd; background: white; }
-              .toast { position: fixed; bottom: 30px; left: 50%; transform: translateX(-50%); background: #27ae60; color: white; padding: 12px 25px; border-radius: 25px; font-weight: bold; opacity: 0; transition: opacity 0.3s; z-index: 2000; pointer-events: none; }
-              .toast.show { opacity: 1; }
-            </style>
-          </head>
-          <body>
-            <header>
-              <h1>🛍️ Boutique E-commerce</h1>
-              <div class="search-bar">
-                <input type="text" id="searchInput" placeholder="Rechercher un produit..." oninput="applyFilters()">
-                <button onclick="applyFilters()">🔍 Rechercher</button>
-              </div>
-              <div class="cart-icon" onclick="toggleCart()">
-                🛒 <span class="cart-count" id="cartCount">0</span>
-              </div>
-            </header>
-            <div class="layout">
-              <aside class="sidebar">
-                <div class="card">
-                  <h3>Catégories</h3>
-                  <button class="category-btn active" onclick="filterCategory('', this)">🏠 Tous</button>
-                  <button class="category-btn" onclick="filterCategory('Smartphones', this)">📱 Smartphones</button>
-                  <button class="category-btn" onclick="filterCategory('Ordinateurs', this)">💻 Ordinateurs</button>
-                  <button class="category-btn" onclick="filterCategory('Audio', this)">🎧 Audio</button>
-                  <button class="category-btn" onclick="filterCategory('Accessoires', this)">⌚ Accessoires</button>
-                </div>
-              </aside>
-              <main class="main">
-                <div class="products-grid" id="productsGrid">
-                  <p style="color:#aaa;padding:20px;">Chargement...</p>
-                </div>
-              </main>
-            </div>
-            <div class="overlay" id="overlay" onclick="toggleCart()"></div>
-            <div class="cart-panel" id="cartPanel">
-              <div class="cart-header">
-                <h2>🛒 Mon Panier</h2>
-                <button class="cart-close" onclick="toggleCart()">✕</button>
-              </div>
-              <div class="cart-items" id="cartItems"><div class="empty-cart">Panier vide</div></div>
-              <div class="cart-footer">
-                <div class="cart-total"><span>Total :</span><span id="cartTotal">0 €</span></div>
-                <button class="btn-order" onclick="order()">✅ Commander</button>
-              </div>
-            </div>
-            <div class="toast" id="toast"></div>
-            <footer>DevOps IaaS | MongoDB + Ansible + Docker + Node.js | Serveur: ${os.hostname()} | Node.js: ${process.version}</footer>
-            <script>
-              let allProducts = [], cart = [], currentCategory = '';
-              fetch('/api/products')
-                .then(r => r.json())
-                .then(p => { allProducts = p; renderProducts(p); })
-                .catch(e => { document.getElementById('productsGrid').innerHTML = '<p style="color:red;padding:20px;">Erreur: ' + e.message + '</p>'; });
-              function renderProducts(products) {
-                const grid = document.getElementById('productsGrid');
-                if (!products.length) { grid.innerHTML = '<p style="color:#aaa;padding:20px;">Aucun produit.</p>'; return; }
-                grid.innerHTML = products.map(p => \`<div class="product-card"><div class="product-image">\${p.image}</div><div class="product-name">\${p.name}</div><div class="product-stock">Stock: \${p.stock}</div><div class="product-price">\${p.price} €</div><button class="btn-add" onclick='addToCart(\${JSON.stringify(p)})'>🛒 Ajouter</button></div>\`).join('');
-              }
-              function filterCategory(cat, btn) {
-                currentCategory = cat;
-                document.querySelectorAll('.category-btn').forEach(b => b.classList.remove('active'));
-                btn.classList.add('active');
-                applyFilters();
-              }
-              function applyFilters() {
-                const q = document.getElementById('searchInput').value.toLowerCase();
-                let f = allProducts;
-                if (currentCategory) f = f.filter(p => p.category === currentCategory);
-                if (q) f = f.filter(p => p.name.toLowerCase().includes(q));
-                renderProducts(f);
-              }
-              function addToCart(p) {
-                const ex = cart.find(i => String(i._id) === String(p._id));
-                if (ex) ex.qty++; else cart.push({...p, qty: 1});
-                updateCart(); showToast(p.name + ' ajouté !');
-              }
-              function updateCart() {
-                document.getElementById('cartCount').textContent = cart.reduce((s,i) => s+i.qty, 0);
-                document.getElementById('cartTotal').textContent = cart.reduce((s,i) => s+i.price*i.qty, 0) + ' €';
-                const div = document.getElementById('cartItems');
-                if (!cart.length) { div.innerHTML = '<div class="empty-cart">Panier vide</div>'; return; }
-                div.innerHTML = cart.map((item, idx) => \`<div class="cart-item"><div class="cart-item-img">\${item.image}</div><div class="cart-item-info"><div class="cart-item-name">\${item.name}</div><div class="cart-item-price">\${item.price * item.qty} €</div></div><div class="cart-item-qty"><button class="qty-btn" onclick="changeQty(\${idx},-1)">-</button><span>\${item.qty}</span><button class="qty-btn" onclick="changeQty(\${idx},1)">+</button></div></div>\`).join('');
-              }
-              function changeQty(idx, d) { cart[idx].qty += d; if (cart[idx].qty <= 0) cart.splice(idx,1); updateCart(); }
-              function toggleCart() { document.getElementById('cartPanel').classList.toggle('open'); document.getElementById('overlay').classList.toggle('open'); }
-              function order() { if (!cart.length) { showToast('Panier vide !'); return; } cart=[]; updateCart(); toggleCart(); showToast('Commande passée ! Merci 🎉'); }
-              function showToast(msg) { const t=document.getElementById('toast'); t.textContent=msg; t.classList.add('show'); setTimeout(()=>t.classList.remove('show'),3000); }
-            </script>
-          </body>
-          </html>`;
-
-          const server = http.createServer(async (req, res) => {
-            if (req.url === '/api/products') {
-              try {
-                if (!db) throw new Error('MongoDB non connecte');
-                const data = await db.collection('products').find({}).toArray();
-                res.writeHead(200, { 'Content-Type': 'application/json' });
-                res.end(JSON.stringify(data));
-              } catch (err) {
-                res.writeHead(500);
-                res.end(JSON.stringify({ error: err.message }));
-              }
-            } else if (req.url === '/health') {
-              res.writeHead(200, { 'Content-Type': 'application/json' });
-              res.end(JSON.stringify({ status: 'ok', mongo: !!db, host: os.hostname() }));
-            } else {
-              res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
-              res.end(HTML);
-            }
-          });
-
-          connectDB().then(() => {
-            server.listen(3000, '0.0.0.0', () => console.log('Serveur sur port 3000'));
-          });
-
-    # ✅ npm init + install en root, chown ensuite
-    - name: Initialiser npm et installer dependances
+    - name: Démarrer l'application avec PM2
       shell: |
-        set -e
         cd "{{ app_dir }}/app"
-        npm init -y
-        npm install mongodb@4.0.0
-        chown -R {{ app_user }}:{{ app_user }} "{{ app_dir }}/app"
-      args:
-        executable: /bin/bash
+        pm2 start server.js --name ecommerce-app
+      become_user: "{{ app_user }}"
 
-    # ✅ FIX : sudo -u au lieu de become_user + pm2 delete avant start
-    - name: Demarrer PM2 via sudo -u
-      shell: |
-        set -e
-        sudo -u {{ app_user }} -H bash -c "
-          export HOME=/home/{{ app_user }}
-          export PATH=/usr/bin:/usr/local/bin:\$PATH
-          cd {{ app_dir }}/app
-          pm2 delete ecommerce-app 2>/dev/null || true
-          pm2 start server.js --name ecommerce-app
-          pm2 save
-        "
-      args:
-        executable: /bin/bash
+    - name: Sauvegarder PM2
+      command: pm2 save
+      become_user: "{{ app_user }}"
 
     - name: Installer Nginx
       apt:
@@ -313,7 +271,6 @@
 
     - name: Configurer Nginx
       copy:
-        dest: /etc/nginx/sites-available/ecommerce
         content: |
           server {
               listen 80;
@@ -321,14 +278,13 @@
               location / {
                   proxy_pass http://localhost:3000;
                   proxy_http_version 1.1;
-                  proxy_set_header Upgrade $http_upgrade;
-                  proxy_set_header Connection 'upgrade';
                   proxy_set_header Host $host;
-                  proxy_cache_bypass $http_upgrade;
+                  proxy_set_header X-Real-IP $remote_addr;
               }
           }
+        dest: /etc/nginx/sites-available/ecommerce
 
-    - name: Activer le site Nginx
+    - name: Activer le site
       file:
         src: /etc/nginx/sites-available/ecommerce
         dest: /etc/nginx/sites-enabled/ecommerce
@@ -340,12 +296,12 @@
         state: absent
       ignore_errors: yes
 
-    - name: Redemarrer Nginx
+    - name: Redémarrer Nginx
       systemd:
         name: nginx
         state: restarted
         enabled: yes
 
-    - name: Afficher URL
+    - name: Afficher l'URL d'accès
       debug:
-        msg: "Application deployee sur http://{{ ansible_default_ipv4.address }}"# v2
+        msg: "Application déployée sur http://{{ inventory_hostname }}"
