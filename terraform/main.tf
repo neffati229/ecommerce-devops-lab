@@ -262,7 +262,7 @@ resource "aws_instance" "web1" {
 
   instance_type          = var.instance_type
 
-  key_name               = var.key_pair_name
+  key_name               = var.key_name
 
   subnet_id              = data.aws_subnet.default_az1.id
 
@@ -288,7 +288,7 @@ resource "aws_instance" "web2" {
 
   instance_type          = var.instance_type
 
-  key_name               = var.key_pair_name
+  key_name               = var.key_name
 
   subnet_id              = data.aws_subnet.default_az2.id
 

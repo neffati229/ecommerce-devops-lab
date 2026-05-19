@@ -1,0 +1,33 @@
+---
+- name: Installer le driver MongoDB
+  hosts: web
+  become: yes
+  vars:
+    app_user: appuser
+    app_dir: /opt/ecommerce
+
+  tasks:
+    - name: Installer le driver MongoDB avec npm
+      shell: |
+        cd {{ app_dir }}/app
+        npm init -y
+        npm install mongodb@4.0.0
+      become_user: "{{ app_user }}"
+
+    - name: Redémarrer l'application avec PM2
+      shell: |
+        pm2 restart ecommerce-app
+      become_user: "{{ app_user }}"
+      ignore_errors: yes
+
+    - name: Vérifier que l'application tourne
+      uri:
+        url: http://localhost:3000
+        status_code: 200
+      register: app_check
+      ignore_errors: yes
+
+    - name: Afficher le statut
+      debug:
+        msg: "Application avec MongoDB opérationnelle"
+      when: app_check.status == 200

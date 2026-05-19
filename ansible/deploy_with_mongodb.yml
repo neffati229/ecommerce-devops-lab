@@ -1,0 +1,240 @@
+---
+- name: Déploiement complet e-commerce avec MongoDB
+  hosts: web
+  become: yes
+  vars:
+    app_user: appuser
+    app_dir: /opt/ecommerce
+
+  tasks:
+    - name: Créer l'utilisateur appuser
+      user:
+        name: "{{ app_user }}"
+        state: present
+        create_home: yes
+        shell: /bin/bash
+
+    - name: Mettre à jour apt
+      apt:
+        update_cache: yes
+        cache_valid_time: 3600
+
+    - name: Installer Docker
+      apt:
+        name:
+          - docker.io
+          - docker-compose
+        state: present
+
+    - name: Démarrer Docker
+      systemd:
+        name: docker
+        state: started
+        enabled: yes
+
+    - name: Ajouter les utilisateurs au groupe docker
+      user:
+        name: "{{ item }}"
+        groups: docker
+        append: yes
+      loop:
+        - ubuntu
+        - "{{ app_user }}"
+
+    - name: Lancer MongoDB avec Docker
+      docker_container:
+        name: mongodb
+        image: mongo:5.0
+        restart_policy: always
+        ports:
+          - "27017:27017"
+        volumes:
+          - mongodb_data:/data/db
+      register: mongodb_container
+
+    - name: Installer Node.js 18
+      shell: |
+        curl -fsSL https://deb.nodesource.com/setup_18.x | sudo -E bash -
+        apt install -y nodejs
+
+    - name: Installer PM2
+      npm:
+        name: pm2
+        global: yes
+
+    - name: Créer le répertoire de l'application
+      file:
+        path: "{{ app_dir }}/app"
+        state: directory
+        owner: "{{ app_user }}"
+        group: "{{ app_user }}"
+        mode: '0755'
+
+    - name: Créer l'application Node.js avec MongoDB
+      copy:
+        content: |
+          const http = require('http');
+          const { MongoClient } = require('mongodb');
+
+          const MONGODB_URI = 'mongodb://localhost:27017';
+          let db;
+
+          async function connectDB() {
+            try {
+              const client = new MongoClient(MONGODB_URI);
+              await client.connect();
+              db = client.db('ecommerce');
+              console.log('✅ MongoDB connecté');
+
+              const products = db.collection('products');
+              const count = await products.countDocuments();
+              if (count === 0) {
+                await products.insertMany([
+                  { name: "Laptop Pro", price: 1200, image: "💻", stock: 15 },
+                  { name: "Smartphone X", price: 800, image: "📱", stock: 23 },
+                  { name: "Casque Audio", price: 150, image: "🎧", stock: 42 }
+                ]);
+                console.log('📦 Produits ajoutés');
+              }
+            } catch (err) {
+              console.error('Erreur MongoDB:', err);
+            }
+          }
+
+          const server = http.createServer(async (req, res) => {
+            if (req.url === '/api/products') {
+              try {
+                const products = db.collection('products');
+                const allProducts = await products.find({}).toArray();
+                res.writeHead(200, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify(allProducts));
+              } catch (err) {
+                res.writeHead(500);
+                res.end(JSON.stringify({ error: err.message }));
+              }
+            } else {
+              res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+              res.end(`
+                <!DOCTYPE html>
+                <html>
+                <head>
+                  <meta charset="UTF-8">
+                  <title>E-commerce Store</title>
+                  <style>
+                    * { margin: 0; padding: 0; box-sizing: border-box; }
+                    body { font-family: 'Segoe UI', sans-serif; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); min-height: 100vh; padding: 40px; }
+                    .container { max-width: 1100px; margin: 0 auto; background: white; border-radius: 15px; overflow: hidden; box-shadow: 0 20px 40px rgba(0,0,0,0.1); }
+                    header { background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; padding: 30px; text-align: center; }
+                    header h1 { font-size: 2em; }
+                    .content { display: flex; min-height: 400px; }
+                    .sidebar { width: 250px; background: #f8f9fa; padding: 30px; border-right: 1px solid #e0e0e0; }
+                    .sidebar h3 { margin-bottom: 20px; color: #333; }
+                    .sidebar li { padding: 10px 0; list-style: none; color: #666; border-bottom: 1px solid #eee; }
+                    .products { flex: 1; padding: 30px; display: flex; flex-wrap: wrap; gap: 20px; }
+                    .product-card { border: 1px solid #ddd; border-radius: 10px; padding: 15px; width: 200px; text-align: center; transition: transform 0.3s; }
+                    .product-card:hover { transform: translateY(-5px); box-shadow: 0 5px 15px rgba(0,0,0,0.1); }
+                    .product-image { font-size: 48px; }
+                    .product-name { font-size: 1.1em; font-weight: bold; margin: 10px 0; }
+                    .product-price { color: #e67e22; font-weight: bold; font-size: 1.2em; }
+                    .product-stock { color: #27ae60; font-size: 0.8em; margin-top: 5px; }
+                    footer { background: #f8f9fa; padding: 20px; text-align: center; color: #666; border-top: 1px solid #e0e0e0; }
+                    @media (max-width: 768px) { .content { flex-direction: column; } .sidebar { width: 100%; } }
+                  </style>
+                </head>
+                <body>
+                <div class="container">
+                  <header><h1>🛍️ Boutique E-commerce</h1></header>
+                  <div class="content">
+                    <div class="sidebar">
+                      <h3>Catégories</h3>
+                      <li>📱 Smartphones</li><li>💻 Ordinateurs</li><li>🎧 Audio</li><li>⌚ Accessoires</li>
+                    </div>
+                    <div class="products" id="products"></div>
+                  </div>
+                  <footer>DevOps IaaS - MongoDB intégré | Ansible + Docker + Node.js</footer>
+                </div>
+                <script>
+                  fetch('/api/products')
+                    .then(r => r.json())
+                    .then(products => {
+                      document.getElementById('products').innerHTML = products.map(p => 
+                        '<div class="product-card">' +
+                          '<div class="product-image">' + p.image + '</div>' +
+                          '<div class="product-name">' + p.name + '</div>' +
+                          '<div class="product-price">' + p.price + ' €</div>' +
+                          '<div class="product-stock">📦 Stock: ' + (p.stock || 'Disponible') + '</div>' +
+                        '</div>'
+                      ).join('');
+                    });
+                </script>
+                </body>
+                </html>
+              `);
+            }
+          });
+
+          connectDB().then(() => {
+            server.listen(3000, () => {
+              console.log('🚀 E-commerce sur port 3000');
+            });
+          });
+        dest: "{{ app_dir }}/app/server.js"
+        owner: "{{ app_user }}"
+        group: "{{ app_user }}"
+        mode: '0755'
+
+    - name: Installer le driver MongoDB
+      shell: |
+        cd "{{ app_dir }}/app"
+        npm init -y
+        npm install mongodb@4.0.0
+      become_user: "{{ app_user }}"
+
+    - name: Démarrer l'application avec PM2
+      shell: |
+        cd "{{ app_dir }}/app"
+        pm2 start server.js --name ecommerce-app
+
+    - name: Sauvegarder PM2
+      command: pm2 save
+
+    - name: Installer Nginx
+      apt:
+        name: nginx
+        state: present
+
+    - name: Configurer Nginx
+      copy:
+        content: |
+          server {
+              listen 80;
+              server_name _;
+              location / {
+                  proxy_pass http://localhost:3000;
+                  proxy_http_version 1.1;
+                  proxy_set_header Host $host;
+              }
+          }
+        dest: /etc/nginx/sites-available/ecommerce
+
+    - name: Activer le site
+      file:
+        src: /etc/nginx/sites-available/ecommerce
+        dest: /etc/nginx/sites-enabled/ecommerce
+        state: link
+
+    - name: Supprimer default site
+      file:
+        path: /etc/nginx/sites-enabled/default
+        state: absent
+      ignore_errors: yes
+
+    - name: Redémarrer Nginx
+      systemd:
+        name: nginx
+        state: restarted
+        enabled: yes
+
+    - name: Afficher l'URL d'accès
+      debug:
+        msg: "Application déployée sur http://{{ ansible_default_ipv4.address }}"

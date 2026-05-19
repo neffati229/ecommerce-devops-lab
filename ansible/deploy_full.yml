@@ -2,32 +2,49 @@
 - name: Déploiement complet e-commerce
   hosts: web
   become: yes
+  vars:
+    app_user: appuser
+    app_dir: /opt/ecommerce
+
   tasks:
     - name: Créer l'utilisateur appuser
       user:
-        name: appuser
+        name: "{{ app_user }}"
         state: present
         create_home: yes
         shell: /bin/bash
 
+    - name: Mettre à jour apt
+      apt:
+        update_cache: yes
+        cache_valid_time: 3600
+
     - name: Installer Docker
-      shell: |
-        amazon-linux-extras install docker -y
-        systemctl start docker
-        systemctl enable docker
-        usermod -aG docker ec2-user
-        usermod -aG docker appuser
+      apt:
+        name:
+          - docker.io
+          - docker-compose
+        state: present
 
-    - name: Installer Docker Compose
-      get_url:
-        url: https://github.com/docker/compose/releases/download/v2.24.0/docker-compose-linux-x86_64
-        dest: /usr/local/bin/docker-compose
-        mode: '0755'
+    - name: Démarrer Docker
+      systemd:
+        name: docker
+        state: started
+        enabled: yes
 
-    - name: Installer Node.js 16
+    - name: Ajouter les utilisateurs au groupe docker
+      user:
+        name: "{{ item }}"
+        groups: docker
+        append: yes
+      loop:
+        - ubuntu
+        - "{{ app_user }}"
+
+    - name: Installer Node.js 18
       shell: |
-        curl -fsSL https://rpm.nodesource.com/setup_16.x | bash -
-        yum install -y nodejs
+        curl -fsSL https://deb.nodesource.com/setup_18.x | sudo -E bash -
+        apt install -y nodejs
 
     - name: Installer PM2
       npm:
@@ -36,10 +53,10 @@
 
     - name: Créer le répertoire de l'application
       file:
-        path: /opt/ecommerce/app
+        path: "{{ app_dir }}/app"
         state: directory
-        owner: appuser
-        group: appuser
+        owner: "{{ app_user }}"
+        group: "{{ app_user }}"
         mode: '0755'
 
     - name: Créer l'application Node.js
@@ -70,29 +87,27 @@
             `);
           });
           server.listen(3000, () => console.log('App running on port 3000'));
-        dest: /opt/ecommerce/app/server.js
-        owner: appuser
-        group: appuser
+        dest: "{{ app_dir }}/app/server.js"
+        owner: "{{ app_user }}"
+        group: "{{ app_user }}"
         mode: '0755'
 
-    - name: Initialiser npm
-      command: npm init -y
-      args:
-        chdir: /opt/ecommerce/app
-      become_user: appuser
+    - name: Créer package.json (via shell)
+      shell: |
+        cd "{{ app_dir }}/app"
+        echo '{"name":"ecommerce-app","version":"1.0.0","main":"server.js"}' > package.json
+        chown {{ app_user }}:{{ app_user }} package.json
 
     - name: Démarrer l'application avec PM2
-      command: pm2 start server.js --name ecommerce-app
-      args:
-        chdir: /opt/ecommerce/app
-      become_user: appuser
+      shell: |
+        cd "{{ app_dir }}/app"
+        pm2 start server.js --name ecommerce-app
 
     - name: Sauvegarder PM2
       command: pm2 save
-      become_user: appuser
 
     - name: Installer Nginx
-      yum:
+      apt:
         name: nginx
         state: present
 
@@ -108,21 +123,26 @@
                   proxy_set_header Host $host;
               }
           }
-        dest: /etc/nginx/conf.d/ecommerce.conf
+        dest: /etc/nginx/sites-available/ecommerce
 
-    - name: Démarrer Nginx
-      service:
-        name: nginx
-        state: started
-        enabled: yes
+    - name: Activer le site
+      file:
+        src: /etc/nginx/sites-available/ecommerce
+        dest: /etc/nginx/sites-enabled/ecommerce
+        state: link
 
-    - name: Vérifier l'application
-      uri:
-        url: http://localhost:3000
-        status_code: 200
-      register: app_check
+    - name: Supprimer default site
+      file:
+        path: /etc/nginx/sites-enabled/default
+        state: absent
       ignore_errors: yes
 
-    - name: Afficher résultat
+    - name: Redémarrer Nginx
+      systemd:
+        name: nginx
+        state: restarted
+        enabled: yes
+
+    - name: Afficher l'URL d'accès
       debug:
         msg: "Application déployée sur http://{{ ansible_default_ipv4.address }}"
