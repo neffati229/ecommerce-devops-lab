@@ -65,6 +65,10 @@
         group: "{{ app_user }}"
         mode: '0755'
 
+    - name: Arrêter PM2 si déjà lancé
+      shell: pm2 delete ecommerce-app || true
+      become_user: "{{ app_user }}"
+
     - name: Supprimer ancien server.js
       file:
         path: "{{ app_dir }}/app/server.js"
@@ -110,10 +114,8 @@
           const path = require('path');
           const os = require('os');
 
-          // Connexion base de données
           const db = new sqlite3.Database(path.join(__dirname, 'products.db'));
 
-          // Créer table et insérer produits
           db.serialize(() => {
             db.run(`CREATE TABLE IF NOT EXISTS products (
               id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -122,7 +124,6 @@
               emoji TEXT,
               description TEXT
             )`);
-
             db.get("SELECT COUNT(*) as count FROM products", (err, row) => {
               if (!err && row.count === 0) {
                 const stmt = db.prepare("INSERT INTO products (name, price, emoji, description) VALUES (?, ?, ?, ?)");
@@ -136,8 +137,6 @@
           });
 
           const server = http.createServer((req, res) => {
-
-            // API JSON
             if (req.url === '/api/products') {
               db.all("SELECT * FROM products", (err, rows) => {
                 if (err) {
@@ -148,8 +147,6 @@
                   res.end(JSON.stringify(rows));
                 }
               });
-
-            // Page HTML
             } else {
               res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
               res.end(`
@@ -163,67 +160,40 @@
                     h1 { color: #e67e22; text-align: center; font-size: 2em; margin-bottom: 10px; }
                     .subtitle { color: green; text-align: center; margin-bottom: 5px; }
                     .info { text-align: center; color: #888; font-size: 0.85em; margin-bottom: 30px; }
-                    .products {
-                      display: flex;
-                      justify-content: center;
-                      gap: 24px;
-                      flex-wrap: wrap;
-                      margin-top: 20px;
-                    }
+                    .products { display: flex; justify-content: center; gap: 24px; flex-wrap: wrap; margin-top: 20px; }
                     .card {
-                      background: white;
-                      border-radius: 12px;
-                      padding: 24px 20px;
-                      width: 220px;
-                      text-align: center;
+                      background: white; border-radius: 12px; padding: 24px 20px;
+                      width: 220px; text-align: center;
                       box-shadow: 0 4px 12px rgba(0,0,0,0.1);
                       transition: transform 0.2s;
                     }
                     .card:hover { transform: translateY(-4px); }
                     .emoji { font-size: 56px; margin-bottom: 12px; }
-                    .card h3 { color: #333; margin-bottom: 6px; font-size: 1.1em; }
+                    .card h3 { color: #333; margin-bottom: 6px; }
                     .desc { color: #999; font-size: 0.82em; margin-bottom: 10px; }
                     .price { color: #e67e22; font-weight: bold; font-size: 1.3em; margin-bottom: 14px; }
                     .btn {
-                      background: #e67e22;
-                      color: white;
-                      border: none;
-                      padding: 10px 18px;
-                      border-radius: 6px;
-                      cursor: pointer;
-                      font-size: 0.95em;
-                      width: 100%;
+                      background: #e67e22; color: white; border: none;
+                      padding: 10px 18px; border-radius: 6px;
+                      cursor: pointer; font-size: 0.95em; width: 100%;
                     }
                     .btn:hover { background: #d35400; }
                     footer { text-align: center; margin-top: 50px; color: #bbb; font-size: 0.8em; }
-                    .loading { text-align: center; color: #888; margin-top: 40px; }
-                    .error { text-align: center; color: red; margin-top: 40px; }
                   </style>
                 </head>
                 <body>
                   <h1>🛍️ Boutique E-commerce</h1>
                   <p class="subtitle">✓ Déploiement réussi avec Ansible !</p>
                   <p class="info">Serveur: ${os.hostname()} | Node.js: ${process.version}</p>
-
                   <div class="products" id="products">
-                    <p class="loading">⏳ Chargement des produits depuis la base de données...</p>
+                    <p style="color:#888">⏳ Chargement depuis la base de données...</p>
                   </div>
-
-                  <footer>
-                    <hr style="margin-bottom:10px;">
-                    DevOps IaaS - Projet complet
-                  </footer>
-
+                  <footer><hr style="margin-bottom:10px;">DevOps IaaS - Projet complet</footer>
                   <script>
                     fetch('/api/products')
                       .then(res => res.json())
                       .then(products => {
-                        const container = document.getElementById('products');
-                        if (products.length === 0) {
-                          container.innerHTML = '<p class="error">Aucun produit trouvé.</p>';
-                          return;
-                        }
-                        container.innerHTML = products.map(p => \`
+                        document.getElementById('products').innerHTML = products.map(p => \`
                           <div class="card">
                             <div class="emoji">\${p.emoji}</div>
                             <h3>\${p.name}</h3>
@@ -235,7 +205,7 @@
                       })
                       .catch(() => {
                         document.getElementById('products').innerHTML =
-                          '<p class="error">❌ Erreur lors du chargement des produits.</p>';
+                          '<p style="color:red">❌ Erreur chargement produits.</p>';
                       });
                   </script>
                 </body>
@@ -249,10 +219,6 @@
         owner: "{{ app_user }}"
         group: "{{ app_user }}"
         mode: '0755'
-
-    - name: Arrêter PM2 si déjà lancé
-      shell: pm2 delete ecommerce-app || true
-      become_user: "{{ app_user }}"
 
     - name: Démarrer l'application avec PM2
       shell: |
