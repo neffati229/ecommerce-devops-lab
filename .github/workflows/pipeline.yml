@@ -1,5 +1,4 @@
 name: Full DevOps Pipeline
-
 on:
   push:
     branches: [ main ]
@@ -66,6 +65,16 @@ jobs:
           for ip in ${{ needs.terraform.outputs.instance_ips }}; do
             echo "$ip ansible_user=ubuntu ansible_ssh_private_key_file=key.pem" >> inventory.ini
           done
+          echo "" >> inventory.ini
+          echo "[web:vars]" >> inventory.ini
+          echo "ansible_python_interpreter=/usr/bin/python3" >> inventory.ini
+          echo "" >> inventory.ini
+          echo "[local]" >> inventory.ini
+          echo "localhost ansible_connection=local" >> inventory.ini
+          echo "" >> inventory.ini
+          echo "[all:children]" >> inventory.ini
+          echo "web" >> inventory.ini
+          echo "local" >> inventory.ini
           cat inventory.ini
           
       - name: Run Ansible Playbook
