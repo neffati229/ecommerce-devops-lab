@@ -5,6 +5,7 @@
   vars:
     app_user: appuser
     app_dir: /opt/ecommerce
+    ansible_python_interpreter: /usr/bin/python3
 
   tasks:
     - name: Créer l'utilisateur appuser
@@ -57,7 +58,7 @@
         state: directory
         owner: "{{ app_user }}"
         group: "{{ app_user }}"
-        mode: '0755'
+        mode: "0755"
 
     - name: Créer l'application Node.js
       copy:
@@ -90,7 +91,7 @@
         dest: "{{ app_dir }}/app/server.js"
         owner: "{{ app_user }}"
         group: "{{ app_user }}"
-        mode: '0755'
+        mode: "0755"
 
     - name: Créer package.json (via shell)
       shell: |
@@ -102,9 +103,11 @@
       shell: |
         cd "{{ app_dir }}/app"
         pm2 start server.js --name ecommerce-app
+      become_user: "{{ app_user }}"
 
     - name: Sauvegarder PM2
       command: pm2 save
+      become_user: "{{ app_user }}"
 
     - name: Installer Nginx
       apt:
