@@ -63,7 +63,7 @@
         state: directory
         owner: "{{ app_user }}"
         group: "{{ app_user }}"
-        mode: '0755'
+        mode: "0755"
 
     - name: Arrêter PM2 si déjà lancé
       shell: pm2 delete ecommerce-app || true
@@ -98,7 +98,7 @@
         dest: "{{ app_dir }}/app/package.json"
         owner: "{{ app_user }}"
         group: "{{ app_user }}"
-        mode: '0644'
+        mode: "0644"
 
     - name: Installer les dépendances npm
       shell: |
@@ -127,9 +127,9 @@
             db.get("SELECT COUNT(*) as count FROM products", (err, row) => {
               if (!err && row.count === 0) {
                 const stmt = db.prepare("INSERT INTO products (name, price, emoji, description) VALUES (?, ?, ?, ?)");
-                stmt.run("Laptop Pro", 1299.99, "💻", "Ordinateur haute performance");
-                stmt.run("Smartphone X", 799.99, "📱", "Dernier modèle disponible");
-                stmt.run("Casque Audio", 199.99, "🎧", "Son haute fidélité");
+                stmt.run("Laptop Pro", 3999.00, "💻", "Ordinateur haute performance");
+                stmt.run("Smartphone X", 2499.00, "📱", "Dernier modèle disponible");
+                stmt.run("Casque Audio", 599.00, "🎧", "Son haute fidélité");
                 stmt.finalize();
                 console.log("Produits insérés en base de données");
               }
@@ -156,11 +156,55 @@
                   <title>Boutique E-commerce</title>
                   <style>
                     * { box-sizing: border-box; margin: 0; padding: 0; }
-                    body { font-family: Arial, sans-serif; background: #f5f5f5; padding: 40px 20px; }
-                    h1 { color: #e67e22; text-align: center; font-size: 2em; margin-bottom: 10px; }
-                    .subtitle { color: green; text-align: center; margin-bottom: 5px; }
-                    .info { text-align: center; color: #888; font-size: 0.85em; margin-bottom: 30px; }
-                    .products { display: flex; justify-content: center; gap: 24px; flex-wrap: wrap; margin-top: 20px; }
+                    body { font-family: Arial, sans-serif; background: #f5f5f5; padding: 20px; }
+                    h1 { color: #e67e22; text-align: center; font-size: 2em; margin-bottom: 6px; }
+                    .subtitle { color: green; text-align: center; margin-bottom: 4px; }
+                    .info { text-align: center; color: #888; font-size: 0.85em; margin-bottom: 20px; }
+
+                    /* Barre de recherche */
+                    .search-bar {
+                      display: flex; justify-content: center; margin-bottom: 30px;
+                    }
+                    .search-bar input {
+                      width: 100%; max-width: 400px;
+                      padding: 10px 16px; border: 2px solid #e67e22;
+                      border-radius: 25px; font-size: 1em; outline: none;
+                    }
+
+                    /* Panier */
+                    .cart-bar {
+                      position: fixed; top: 16px; right: 16px;
+                      background: #e67e22; color: white;
+                      padding: 10px 18px; border-radius: 25px;
+                      cursor: pointer; font-size: 1em;
+                      box-shadow: 0 4px 12px rgba(0,0,0,0.2);
+                      z-index: 100;
+                    }
+                    .cart-panel {
+                      display: none; position: fixed; top: 60px; right: 16px;
+                      background: white; border-radius: 12px;
+                      box-shadow: 0 8px 24px rgba(0,0,0,0.15);
+                      width: 300px; padding: 16px; z-index: 100;
+                    }
+                    .cart-panel h3 { color: #e67e22; margin-bottom: 12px; }
+                    .cart-item {
+                      display: flex; justify-content: space-between;
+                      padding: 6px 0; border-bottom: 1px solid #f0f0f0;
+                      font-size: 0.9em;
+                    }
+                    .cart-total {
+                      margin-top: 12px; font-weight: bold;
+                      color: #e67e22; text-align: right;
+                    }
+                    .cart-empty { color: #999; text-align: center; padding: 12px 0; }
+                    .btn-clear {
+                      background: #e74c3c; color: white; border: none;
+                      padding: 8px 14px; border-radius: 6px;
+                      cursor: pointer; width: 100%; margin-top: 10px;
+                    }
+
+                    /* Produits */
+                    .products { display: flex; justify-content: center; gap: 24px; flex-wrap: wrap; }
                     .card {
                       background: white; border-radius: 12px; padding: 24px 20px;
                       width: 220px; text-align: center;
@@ -171,42 +215,142 @@
                     .emoji { font-size: 56px; margin-bottom: 12px; }
                     .card h3 { color: #333; margin-bottom: 6px; }
                     .desc { color: #999; font-size: 0.82em; margin-bottom: 10px; }
-                    .price { color: #e67e22; font-weight: bold; font-size: 1.3em; margin-bottom: 14px; }
+                    .price { color: #e67e22; font-weight: bold; font-size: 1.2em; margin-bottom: 14px; }
                     .btn {
                       background: #e67e22; color: white; border: none;
                       padding: 10px 18px; border-radius: 6px;
                       cursor: pointer; font-size: 0.95em; width: 100%;
+                      transition: background 0.2s;
                     }
                     .btn:hover { background: #d35400; }
+                    .btn.added { background: #27ae60; }
                     footer { text-align: center; margin-top: 50px; color: #bbb; font-size: 0.8em; }
+                    .no-results { text-align: center; color: #999; margin-top: 30px; }
                   </style>
                 </head>
                 <body>
+                  <div class="cart-bar" onclick="toggleCart()">
+                    🛒 Panier (<span id="cart-count">0</span>)
+                  </div>
+                  <div class="cart-panel" id="cart-panel">
+                    <h3>🛒 Mon Panier</h3>
+                    <div id="cart-items"><p class="cart-empty">Panier vide</p></div>
+                    <div class="cart-total" id="cart-total"></div>
+                    <button class="btn-clear" onclick="clearCart()">🗑️ Vider le panier</button>
+                  </div>
+
                   <h1>🛍️ Boutique E-commerce</h1>
                   <p class="subtitle">✓ Déploiement réussi avec Ansible !</p>
                   <p class="info">Serveur: ${os.hostname()} | Node.js: ${process.version}</p>
+
+                  <div class="search-bar">
+                    <input type="text" id="search" placeholder="🔍 Rechercher un produit..." oninput="filterProducts()">
+                  </div>
+
                   <div class="products" id="products">
                     <p style="color:#888">⏳ Chargement depuis la base de données...</p>
                   </div>
+
                   <footer><hr style="margin-bottom:10px;">DevOps IaaS - Projet complet</footer>
+
                   <script>
+                    let allProducts = [];
+                    let cart = [];
+
                     fetch('/api/products')
                       .then(res => res.json())
                       .then(products => {
-                        document.getElementById('products').innerHTML = products.map(p => \`
-                          <div class="card">
-                            <div class="emoji">\${p.emoji}</div>
-                            <h3>\${p.name}</h3>
-                            <div class="desc">\${p.description}</div>
-                            <div class="price">\${p.price.toFixed(2)} €</div>
-                            <button class="btn">🛒 Ajouter au panier</button>
-                          </div>
-                        \`).join('');
+                        allProducts = products;
+                        renderProducts(products);
                       })
                       .catch(() => {
                         document.getElementById('products').innerHTML =
                           '<p style="color:red">❌ Erreur chargement produits.</p>';
                       });
+
+                    function renderProducts(products) {
+                      const container = document.getElementById('products');
+                      if (products.length === 0) {
+                        container.innerHTML = '<p class="no-results">Aucun produit trouvé.</p>';
+                        return;
+                      }
+                      container.innerHTML = products.map(p => \`
+                        <div class="card">
+                          <div class="emoji">\${p.emoji}</div>
+                          <h3>\${p.name}</h3>
+                          <div class="desc">\${p.description}</div>
+                          <div class="price">\${p.price.toFixed(3)} DT</div>
+                          <button class="btn" id="btn-\${p.id}" onclick="addToCart(\${p.id}, '\${p.name}', \${p.price})">
+                            🛒 Ajouter au panier
+                          </button>
+                        </div>
+                      \`).join('');
+                    }
+
+                    function filterProducts() {
+                      const query = document.getElementById('search').value.toLowerCase();
+                      const filtered = allProducts.filter(p =>
+                        p.name.toLowerCase().includes(query) ||
+                        p.description.toLowerCase().includes(query)
+                      );
+                      renderProducts(filtered);
+                    }
+
+                    function addToCart(id, name, price) {
+                      const existing = cart.find(i => i.id === id);
+                      if (existing) {
+                        existing.qty += 1;
+                      } else {
+                        cart.push({ id, name, price, qty: 1 });
+                      }
+                      updateCartUI();
+                      const btn = document.getElementById('btn-' + id);
+                      if (btn) {
+                        btn.textContent = '✓ Ajouté !';
+                        btn.classList.add('added');
+                        setTimeout(() => {
+                          btn.textContent = '🛒 Ajouter au panier';
+                          btn.classList.remove('added');
+                        }, 1500);
+                      }
+                    }
+
+                    function updateCartUI() {
+                      const count = cart.reduce((s, i) => s + i.qty, 0);
+                      document.getElementById('cart-count').textContent = count;
+                      const itemsEl = document.getElementById('cart-items');
+                      if (cart.length === 0) {
+                        itemsEl.innerHTML = '<p class="cart-empty">Panier vide</p>';
+                        document.getElementById('cart-total').textContent = '';
+                      } else {
+                        itemsEl.innerHTML = cart.map(i => \`
+                          <div class="cart-item">
+                            <span>\${i.emoji || ''} \${i.name} x\${i.qty}</span>
+                            <span>\${(i.price * i.qty).toFixed(3)} DT</span>
+                          </div>
+                        \`).join('');
+                        const total = cart.reduce((s, i) => s + i.price * i.qty, 0);
+                        document.getElementById('cart-total').textContent = 'Total: ' + total.toFixed(3) + ' DT';
+                      }
+                    }
+
+                    function toggleCart() {
+                      const panel = document.getElementById('cart-panel');
+                      panel.style.display = panel.style.display === 'block' ? 'none' : 'block';
+                    }
+
+                    function clearCart() {
+                      cart = [];
+                      updateCartUI();
+                    }
+
+                    document.addEventListener('click', function(e) {
+                      const panel = document.getElementById('cart-panel');
+                      const cartBar = document.querySelector('.cart-bar');
+                      if (!panel.contains(e.target) && !cartBar.contains(e.target)) {
+                        panel.style.display = 'none';
+                      }
+                    });
                   </script>
                 </body>
                 </html>
@@ -218,7 +362,7 @@
         dest: "{{ app_dir }}/app/server.js"
         owner: "{{ app_user }}"
         group: "{{ app_user }}"
-        mode: '0755'
+        mode: "0755"
 
     - name: Démarrer l'application avec PM2
       shell: |
