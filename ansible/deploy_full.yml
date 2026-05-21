@@ -46,6 +46,8 @@
       shell: |
         curl -fsSL https://deb.nodesource.com/setup_18.x | sudo -E bash -
         apt install -y nodejs
+      args:
+        creates: /usr/bin/node
 
     - name: Installer sqlite3 système
       apt:
@@ -69,27 +71,21 @@
       shell: pm2 delete ecommerce-app || true
       become_user: "{{ app_user }}"
 
-    - name: Supprimer ancien server.js
+    - name: Supprimer anciens fichiers
       file:
-        path: "{{ app_dir }}/app/server.js"
+        path: "{{ item }}"
         state: absent
-
-    - name: Supprimer ancien package.json
-      file:
-        path: "{{ app_dir }}/app/package.json"
-        state: absent
-
-    - name: Supprimer ancienne base de données
-      file:
-        path: "{{ app_dir }}/app/products.db"
-        state: absent
+      loop:
+        - "{{ app_dir }}/app/server.js"
+        - "{{ app_dir }}/app/package.json"
+        - "{{ app_dir }}/app/products.db"
 
     - name: Créer package.json avec sqlite3
       copy:
         content: |
           {
             "name": "ecommerce-app",
-            "version": "1.0.0",
+            "version": "2.0.0",
             "main": "server.js",
             "dependencies": {
               "sqlite3": "^5.1.6"
@@ -103,17 +99,19 @@
     - name: Installer les dépendances npm
       shell: |
         cd "{{ app_dir }}/app"
-        npm install
+        npm install --production
         chown -R {{ app_user }}:{{ app_user }} .
 
-    - name: Créer l'application Node.js avec SQLite
+    - name: Créer l'application Node.js optimisée
       copy:
         content: |
           const http = require('http');
           const sqlite3 = require('sqlite3').verbose();
           const path = require('path');
           const os = require('os');
+          const url = require('url');
 
+          // Base de données
           const db = new sqlite3.Database(path.join(__dirname, 'products.db'));
 
           db.serialize(() => {
@@ -122,23 +120,51 @@
               name TEXT NOT NULL,
               price REAL NOT NULL,
               emoji TEXT,
-              description TEXT
+              description TEXT,
+              category TEXT,
+              stock INTEGER DEFAULT 10
             )`);
+
             db.get("SELECT COUNT(*) as count FROM products", (err, row) => {
               if (!err && row.count === 0) {
-                const stmt = db.prepare("INSERT INTO products (name, price, emoji, description) VALUES (?, ?, ?, ?)");
-                stmt.run("Laptop Pro", 3999.00, "💻", "Ordinateur haute performance");
-                stmt.run("Smartphone X", 2499.00, "📱", "Dernier modèle disponible");
-                stmt.run("Casque Audio", 599.00, "🎧", "Son haute fidélité");
+                const stmt = db.prepare("INSERT INTO products (name, price, emoji, description, category, stock) VALUES (?, ?, ?, ?, ?, ?)");
+                stmt.run("Laptop Pro", 3999.000, "💻", "Ordinateur haute performance 16GB RAM", "Informatique", 5);
+                stmt.run("Smartphone X", 2499.000, "📱", "Écran AMOLED 6.7\" - 256GB", "Téléphonie", 12);
+                stmt.run("Casque Audio", 599.000, "🎧", "Son haute fidélité - Réduction de bruit", "Audio", 8);
+                stmt.run("Tablette Pro", 1899.000, "📟", "Écran 11\" - Stylet inclus", "Informatique", 6);
+                stmt.run("Montre Smart", 899.000, "⌚", "GPS - Fréquence cardiaque - 5ATM", "Accessoires", 15);
+                stmt.run("Caméra 4K", 2999.000, "📷", "Capteur plein format - 45MP", "Photo", 3);
                 stmt.finalize();
-                console.log("Produits insérés en base de données");
+                console.log("✅ Produits insérés en base de données");
               }
             });
           });
 
-          const server = http.createServer((req, res) => {
-            if (req.url === '/api/products') {
-              db.all("SELECT * FROM products", (err, rows) => {
+          // Router simple
+          function router(req, res) {
+            const parsedUrl = url.parse(req.url, true);
+            const pathname = parsedUrl.pathname;
+            const query = parsedUrl.query;
+
+            // CORS
+            res.setHeader('Access-Control-Allow-Origin', '*');
+
+            // API - tous les produits
+            if (pathname === '/api/products') {
+              let sql = "SELECT * FROM products";
+              const params = [];
+              if (query.category) {
+                sql += " WHERE category = ?";
+                params.push(query.category);
+              }
+              if (query.search) {
+                sql += params.length ? " AND" : " WHERE";
+                sql += " (name LIKE ? OR description LIKE ?)";
+                params.push('%' + query.search + '%', '%' + query.search + '%');
+              }
+              sql += " ORDER BY id";
+
+              db.all(sql, params, (err, rows) => {
                 if (err) {
                   res.writeHead(500, { 'Content-Type': 'application/json' });
                   res.end(JSON.stringify({ error: err.message }));
@@ -147,218 +173,410 @@
                   res.end(JSON.stringify(rows));
                 }
               });
+
+            // API - catégories
+            } else if (pathname === '/api/categories') {
+              db.all("SELECT DISTINCT category FROM products ORDER BY category", (err, rows) => {
+                res.writeHead(200, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify(rows.map(r => r.category)));
+              });
+
+            // API - stats
+            } else if (pathname === '/api/stats') {
+              db.get("SELECT COUNT(*) as total, SUM(stock) as stock FROM products", (err, row) => {
+                res.writeHead(200, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({
+                  total: row.total,
+                  stock: row.stock,
+                  server: os.hostname(),
+                  node: process.version,
+                  uptime: Math.floor(process.uptime()) + 's'
+                }));
+              });
+
+            // Page HTML
             } else {
               res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
-              res.end(`
-                <!DOCTYPE html>
-                <html>
-                <head>
-                  <title>Boutique E-commerce</title>
-                  <style>
-                    * { box-sizing: border-box; margin: 0; padding: 0; }
-                    body { font-family: Arial, sans-serif; background: #f5f5f5; padding: 20px; }
-                    h1 { color: #e67e22; text-align: center; font-size: 2em; margin-bottom: 6px; }
-                    .subtitle { color: green; text-align: center; margin-bottom: 4px; }
-                    .info { text-align: center; color: #888; font-size: 0.85em; margin-bottom: 20px; }
+              res.end(`<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>TechShop Tunisia 🇹🇳</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    :root {
+      --orange: #e67e22;
+      --orange-dark: #d35400;
+      --green: #27ae60;
+      --red: #e74c3c;
+      --gray: #f5f5f5;
+      --shadow: 0 4px 16px rgba(0,0,0,0.1);
+    }
+    body { font-family: 'Segoe UI', Arial, sans-serif; background: var(--gray); }
 
-                    /* Barre de recherche */
-                    .search-bar {
-                      display: flex; justify-content: center; margin-bottom: 30px;
-                    }
-                    .search-bar input {
-                      width: 100%; max-width: 400px;
-                      padding: 10px 16px; border: 2px solid #e67e22;
-                      border-radius: 25px; font-size: 1em; outline: none;
-                    }
+    /* Header */
+    header {
+      background: linear-gradient(135deg, #e67e22, #d35400);
+      color: white; padding: 16px 24px;
+      display: flex; justify-content: space-between; align-items: center;
+      box-shadow: 0 2px 12px rgba(0,0,0,0.2); position: sticky; top: 0; z-index: 200;
+    }
+    .logo { font-size: 1.5em; font-weight: bold; }
+    .logo span { font-size: 0.7em; display: block; opacity: 0.85; font-weight: normal; }
+    .cart-btn {
+      background: white; color: var(--orange);
+      border: none; padding: 10px 20px; border-radius: 25px;
+      cursor: pointer; font-weight: bold; font-size: 1em;
+      transition: transform 0.2s;
+    }
+    .cart-btn:hover { transform: scale(1.05); }
 
-                    /* Panier */
-                    .cart-bar {
-                      position: fixed; top: 16px; right: 16px;
-                      background: #e67e22; color: white;
-                      padding: 10px 18px; border-radius: 25px;
-                      cursor: pointer; font-size: 1em;
-                      box-shadow: 0 4px 12px rgba(0,0,0,0.2);
-                      z-index: 100;
-                    }
-                    .cart-panel {
-                      display: none; position: fixed; top: 60px; right: 16px;
-                      background: white; border-radius: 12px;
-                      box-shadow: 0 8px 24px rgba(0,0,0,0.15);
-                      width: 300px; padding: 16px; z-index: 100;
-                    }
-                    .cart-panel h3 { color: #e67e22; margin-bottom: 12px; }
-                    .cart-item {
-                      display: flex; justify-content: space-between;
-                      padding: 6px 0; border-bottom: 1px solid #f0f0f0;
-                      font-size: 0.9em;
-                    }
-                    .cart-total {
-                      margin-top: 12px; font-weight: bold;
-                      color: #e67e22; text-align: right;
-                    }
-                    .cart-empty { color: #999; text-align: center; padding: 12px 0; }
-                    .btn-clear {
-                      background: #e74c3c; color: white; border: none;
-                      padding: 8px 14px; border-radius: 6px;
-                      cursor: pointer; width: 100%; margin-top: 10px;
-                    }
+    /* Panier drawer */
+    .overlay {
+      display: none; position: fixed; inset: 0;
+      background: rgba(0,0,0,0.4); z-index: 300;
+    }
+    .cart-drawer {
+      position: fixed; top: 0; right: -380px; width: 360px; height: 100%;
+      background: white; z-index: 400; padding: 24px;
+      transition: right 0.3s ease; overflow-y: auto;
+      box-shadow: -4px 0 24px rgba(0,0,0,0.15);
+    }
+    .cart-drawer.open { right: 0; }
+    .cart-header {
+      display: flex; justify-content: space-between; align-items: center;
+      margin-bottom: 20px; padding-bottom: 12px;
+      border-bottom: 2px solid var(--gray);
+    }
+    .cart-header h2 { color: var(--orange); }
+    .close-btn {
+      background: none; border: none; font-size: 1.5em;
+      cursor: pointer; color: #666;
+    }
+    .cart-item {
+      display: flex; justify-content: space-between; align-items: center;
+      padding: 12px 0; border-bottom: 1px solid #f0f0f0;
+    }
+    .cart-item-info { flex: 1; }
+    .cart-item-name { font-weight: bold; font-size: 0.9em; }
+    .cart-item-price { color: var(--orange); font-size: 0.85em; }
+    .qty-controls { display: flex; align-items: center; gap: 8px; }
+    .qty-btn {
+      background: var(--orange); color: white; border: none;
+      width: 26px; height: 26px; border-radius: 50%;
+      cursor: pointer; font-size: 1em; line-height: 1;
+    }
+    .cart-empty { text-align: center; color: #999; padding: 40px 0; font-size: 1.1em; }
+    .cart-footer {
+      position: sticky; bottom: 0; background: white;
+      padding-top: 16px; margin-top: 16px;
+      border-top: 2px solid var(--gray);
+    }
+    .cart-total { font-size: 1.2em; font-weight: bold; color: var(--orange); margin-bottom: 12px; }
+    .btn-checkout {
+      background: var(--green); color: white; border: none;
+      padding: 14px; border-radius: 8px; width: 100%;
+      font-size: 1em; cursor: pointer; margin-bottom: 8px;
+    }
+    .btn-clear {
+      background: var(--red); color: white; border: none;
+      padding: 10px; border-radius: 8px; width: 100%;
+      font-size: 0.9em; cursor: pointer;
+    }
 
-                    /* Produits */
-                    .products { display: flex; justify-content: center; gap: 24px; flex-wrap: wrap; }
-                    .card {
-                      background: white; border-radius: 12px; padding: 24px 20px;
-                      width: 220px; text-align: center;
-                      box-shadow: 0 4px 12px rgba(0,0,0,0.1);
-                      transition: transform 0.2s;
-                    }
-                    .card:hover { transform: translateY(-4px); }
-                    .emoji { font-size: 56px; margin-bottom: 12px; }
-                    .card h3 { color: #333; margin-bottom: 6px; }
-                    .desc { color: #999; font-size: 0.82em; margin-bottom: 10px; }
-                    .price { color: #e67e22; font-weight: bold; font-size: 1.2em; margin-bottom: 14px; }
-                    .btn {
-                      background: #e67e22; color: white; border: none;
-                      padding: 10px 18px; border-radius: 6px;
-                      cursor: pointer; font-size: 0.95em; width: 100%;
-                      transition: background 0.2s;
-                    }
-                    .btn:hover { background: #d35400; }
-                    .btn.added { background: #27ae60; }
-                    footer { text-align: center; margin-top: 50px; color: #bbb; font-size: 0.8em; }
-                    .no-results { text-align: center; color: #999; margin-top: 30px; }
-                  </style>
-                </head>
-                <body>
-                  <div class="cart-bar" onclick="toggleCart()">
-                    🛒 Panier (<span id="cart-count">0</span>)
-                  </div>
-                  <div class="cart-panel" id="cart-panel">
-                    <h3>🛒 Mon Panier</h3>
-                    <div id="cart-items"><p class="cart-empty">Panier vide</p></div>
-                    <div class="cart-total" id="cart-total"></div>
-                    <button class="btn-clear" onclick="clearCart()">🗑️ Vider le panier</button>
-                  </div>
+    /* Filtres */
+    .filters {
+      padding: 20px 24px; display: flex; gap: 12px;
+      flex-wrap: wrap; align-items: center;
+      background: white; border-bottom: 1px solid #eee;
+    }
+    .search-input {
+      flex: 1; min-width: 200px; max-width: 400px;
+      padding: 10px 18px; border: 2px solid var(--orange);
+      border-radius: 25px; font-size: 1em; outline: none;
+    }
+    .filter-btn {
+      padding: 8px 18px; border-radius: 20px;
+      border: 2px solid var(--orange); background: white;
+      color: var(--orange); cursor: pointer; font-size: 0.9em;
+      transition: all 0.2s;
+    }
+    .filter-btn.active, .filter-btn:hover {
+      background: var(--orange); color: white;
+    }
 
-                  <h1>🛍️ Boutique E-commerce</h1>
-                  <p class="subtitle">✓ Déploiement réussi avec Ansible !</p>
-                  <p class="info">Serveur: ${os.hostname()} | Node.js: ${process.version}</p>
+    /* Grille produits */
+    .main { padding: 24px; }
+    .stats-bar {
+      text-align: center; color: #888; font-size: 0.85em; margin-bottom: 16px;
+    }
+    .products {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+      gap: 20px;
+    }
+    .card {
+      background: white; border-radius: 16px; padding: 24px 20px;
+      text-align: center; box-shadow: var(--shadow);
+      transition: transform 0.2s, box-shadow 0.2s;
+      display: flex; flex-direction: column;
+    }
+    .card:hover { transform: translateY(-6px); box-shadow: 0 8px 24px rgba(0,0,0,0.15); }
+    .card-emoji { font-size: 60px; margin-bottom: 12px; }
+    .card-category {
+      font-size: 0.75em; color: var(--orange);
+      text-transform: uppercase; letter-spacing: 1px; margin-bottom: 4px;
+    }
+    .card h3 { color: #222; margin-bottom: 8px; font-size: 1.05em; }
+    .card-desc { color: #999; font-size: 0.82em; margin-bottom: 12px; flex: 1; }
+    .card-stock { font-size: 0.78em; color: #aaa; margin-bottom: 8px; }
+    .card-stock.low { color: var(--red); }
+    .card-price { color: var(--orange); font-weight: bold; font-size: 1.3em; margin-bottom: 16px; }
+    .btn-add {
+      background: var(--orange); color: white; border: none;
+      padding: 12px; border-radius: 8px; cursor: pointer;
+      font-size: 0.95em; width: 100%; transition: background 0.2s;
+    }
+    .btn-add:hover { background: var(--orange-dark); }
+    .btn-add.added { background: var(--green); }
 
-                  <div class="search-bar">
-                    <input type="text" id="search" placeholder="🔍 Rechercher un produit..." oninput="filterProducts()">
-                  </div>
+    /* Toast */
+    .toast {
+      position: fixed; bottom: 24px; left: 50%; transform: translateX(-50%);
+      background: #333; color: white; padding: 12px 24px;
+      border-radius: 25px; font-size: 0.95em; opacity: 0;
+      transition: opacity 0.3s; z-index: 500; pointer-events: none;
+    }
+    .toast.show { opacity: 1; }
 
-                  <div class="products" id="products">
-                    <p style="color:#888">⏳ Chargement depuis la base de données...</p>
-                  </div>
+    footer {
+      text-align: center; padding: 24px; color: #bbb;
+      font-size: 0.8em; border-top: 1px solid #eee;
+    }
+    .no-results { text-align: center; color: #999; padding: 60px 0; font-size: 1.1em; }
+  </style>
+</head>
+<body>
 
-                  <footer><hr style="margin-bottom:10px;">DevOps IaaS - Projet complet</footer>
+  <header>
+    <div class="logo">
+      🛍️ TechShop Tunisia
+      <span>Déployé avec Ansible • Node.js ${process.version}</span>
+    </div>
+    <button class="cart-btn" onclick="openCart()">
+      🛒 Panier <span id="cart-count">0</span>
+    </button>
+  </header>
 
-                  <script>
-                    let allProducts = [];
-                    let cart = [];
+  <!-- Panier drawer -->
+  <div class="overlay" id="overlay" onclick="closeCart()"></div>
+  <div class="cart-drawer" id="cart-drawer">
+    <div class="cart-header">
+      <h2>🛒 Mon Panier</h2>
+      <button class="close-btn" onclick="closeCart()">✕</button>
+    </div>
+    <div id="cart-items"><p class="cart-empty">🛒 Votre panier est vide</p></div>
+    <div class="cart-footer" id="cart-footer" style="display:none">
+      <div class="cart-total" id="cart-total"></div>
+      <button class="btn-checkout" onclick="checkout()">✅ Commander</button>
+      <button class="btn-clear" onclick="clearCart()">🗑️ Vider le panier</button>
+    </div>
+  </div>
 
-                    fetch('/api/products')
-                      .then(res => res.json())
-                      .then(products => {
-                        allProducts = products;
-                        renderProducts(products);
-                      })
-                      .catch(() => {
-                        document.getElementById('products').innerHTML =
-                          '<p style="color:red">❌ Erreur chargement produits.</p>';
-                      });
+  <!-- Filtres -->
+  <div class="filters">
+    <input type="text" class="search-input" id="search"
+      placeholder="🔍 Rechercher un produit..." oninput="filterProducts()">
+    <div id="category-filters"></div>
+  </div>
 
-                    function renderProducts(products) {
-                      const container = document.getElementById('products');
-                      if (products.length === 0) {
-                        container.innerHTML = '<p class="no-results">Aucun produit trouvé.</p>';
-                        return;
-                      }
-                      container.innerHTML = products.map(p => \`
-                        <div class="card">
-                          <div class="emoji">\${p.emoji}</div>
-                          <h3>\${p.name}</h3>
-                          <div class="desc">\${p.description}</div>
-                          <div class="price">\${p.price.toFixed(3)} DT</div>
-                          <button class="btn" id="btn-\${p.id}" onclick="addToCart(\${p.id}, '\${p.name}', \${p.price})">
-                            🛒 Ajouter au panier
-                          </button>
-                        </div>
-                      \`).join('');
-                    }
+  <div class="main">
+    <div class="stats-bar" id="stats-bar"></div>
+    <div class="products" id="products">
+      <p style="color:#aaa; text-align:center; grid-column:1/-1; padding:40px">
+        ⏳ Chargement...
+      </p>
+    </div>
+  </div>
 
-                    function filterProducts() {
-                      const query = document.getElementById('search').value.toLowerCase();
-                      const filtered = allProducts.filter(p =>
-                        p.name.toLowerCase().includes(query) ||
-                        p.description.toLowerCase().includes(query)
-                      );
-                      renderProducts(filtered);
-                    }
+  <footer>
+    🇹🇳 TechShop Tunisia • DevOps IaaS - Projet complet • Serveur: ${os.hostname()}
+  </footer>
 
-                    function addToCart(id, name, price) {
-                      const existing = cart.find(i => i.id === id);
-                      if (existing) {
-                        existing.qty += 1;
-                      } else {
-                        cart.push({ id, name, price, qty: 1 });
-                      }
-                      updateCartUI();
-                      const btn = document.getElementById('btn-' + id);
-                      if (btn) {
-                        btn.textContent = '✓ Ajouté !';
-                        btn.classList.add('added');
-                        setTimeout(() => {
-                          btn.textContent = '🛒 Ajouter au panier';
-                          btn.classList.remove('added');
-                        }, 1500);
-                      }
-                    }
+  <!-- Toast -->
+  <div class="toast" id="toast"></div>
 
-                    function updateCartUI() {
-                      const count = cart.reduce((s, i) => s + i.qty, 0);
-                      document.getElementById('cart-count').textContent = count;
-                      const itemsEl = document.getElementById('cart-items');
-                      if (cart.length === 0) {
-                        itemsEl.innerHTML = '<p class="cart-empty">Panier vide</p>';
-                        document.getElementById('cart-total').textContent = '';
-                      } else {
-                        itemsEl.innerHTML = cart.map(i => \`
-                          <div class="cart-item">
-                            <span>\${i.emoji || ''} \${i.name} x\${i.qty}</span>
-                            <span>\${(i.price * i.qty).toFixed(3)} DT</span>
-                          </div>
-                        \`).join('');
-                        const total = cart.reduce((s, i) => s + i.price * i.qty, 0);
-                        document.getElementById('cart-total').textContent = 'Total: ' + total.toFixed(3) + ' DT';
-                      }
-                    }
+  <script>
+    let allProducts = [];
+    let cart = [];
+    let activeCategory = 'Tous';
 
-                    function toggleCart() {
-                      const panel = document.getElementById('cart-panel');
-                      panel.style.display = panel.style.display === 'block' ? 'none' : 'block';
-                    }
+    // Chargement initial
+    Promise.all([
+      fetch('/api/products').then(r => r.json()),
+      fetch('/api/categories').then(r => r.json()),
+      fetch('/api/stats').then(r => r.json())
+    ]).then(([products, categories, stats]) => {
+      allProducts = products;
+      renderCategories(['Tous', ...categories]);
+      renderProducts(products);
+      document.getElementById('stats-bar').textContent =
+        stats.total + ' produits disponibles • Serveur: ' + stats.server + ' • Uptime: ' + stats.uptime;
+    }).catch(() => {
+      document.getElementById('products').innerHTML =
+        '<p style="color:red;text-align:center;grid-column:1/-1">❌ Erreur de chargement</p>';
+    });
 
-                    function clearCart() {
-                      cart = [];
-                      updateCartUI();
-                    }
+    function renderCategories(cats) {
+      document.getElementById('category-filters').innerHTML = cats.map(c => \`
+        <button class="filter-btn \${c === activeCategory ? 'active' : ''}"
+          onclick="setCategory('\${c}')">\${c}</button>
+      \`).join('');
+    }
 
-                    document.addEventListener('click', function(e) {
-                      const panel = document.getElementById('cart-panel');
-                      const cartBar = document.querySelector('.cart-bar');
-                      if (!panel.contains(e.target) && !cartBar.contains(e.target)) {
-                        panel.style.display = 'none';
-                      }
-                    });
-                  </script>
-                </body>
-                </html>
-              `);
+    function setCategory(cat) {
+      activeCategory = cat;
+      filterProducts();
+      document.querySelectorAll('.filter-btn').forEach(b => {
+        b.classList.toggle('active', b.textContent === cat);
+      });
+    }
+
+    function filterProducts() {
+      const query = document.getElementById('search').value.toLowerCase();
+      let filtered = allProducts;
+      if (activeCategory !== 'Tous') {
+        filtered = filtered.filter(p => p.category === activeCategory);
+      }
+      if (query) {
+        filtered = filtered.filter(p =>
+          p.name.toLowerCase().includes(query) ||
+          p.description.toLowerCase().includes(query) ||
+          p.category.toLowerCase().includes(query)
+        );
+      }
+      renderProducts(filtered);
+    }
+
+    function renderProducts(products) {
+      const container = document.getElementById('products');
+      if (products.length === 0) {
+        container.innerHTML = '<p class="no-results">🔍 Aucun produit trouvé.</p>';
+        return;
+      }
+      container.innerHTML = products.map(p => \`
+        <div class="card">
+          <div class="card-emoji">\${p.emoji}</div>
+          <div class="card-category">\${p.category}</div>
+          <h3>\${p.name}</h3>
+          <div class="card-desc">\${p.description}</div>
+          <div class="card-stock \${p.stock <= 3 ? 'low' : ''}">
+            \${p.stock <= 3 ? '⚠️ Plus que ' + p.stock + ' en stock' : '✅ En stock (' + p.stock + ')'}
+          </div>
+          <div class="card-price">\${p.price.toFixed(3)} DT</div>
+          <button class="btn-add" id="btn-\${p.id}"
+            onclick="addToCart(\${p.id}, '\${p.name}', \${p.price}, '\${p.emoji}')">
+            🛒 Ajouter au panier
+          </button>
+        </div>
+      \`).join('');
+    }
+
+    function addToCart(id, name, price, emoji) {
+      const existing = cart.find(i => i.id === id);
+      if (existing) {
+        existing.qty += 1;
+      } else {
+        cart.push({ id, name, price, emoji, qty: 1 });
+      }
+      updateCartUI();
+      showToast(emoji + ' ' + name + ' ajouté au panier !');
+      const btn = document.getElementById('btn-' + id);
+      if (btn) {
+        btn.textContent = '✓ Ajouté !';
+        btn.classList.add('added');
+        setTimeout(() => {
+          btn.textContent = '🛒 Ajouter au panier';
+          btn.classList.remove('added');
+        }, 1500);
+      }
+    }
+
+    function updateCartUI() {
+      const count = cart.reduce((s, i) => s + i.qty, 0);
+      document.getElementById('cart-count').textContent = count;
+      const itemsEl = document.getElementById('cart-items');
+      const footerEl = document.getElementById('cart-footer');
+
+      if (cart.length === 0) {
+        itemsEl.innerHTML = '<p class="cart-empty">🛒 Votre panier est vide</p>';
+        footerEl.style.display = 'none';
+      } else {
+        itemsEl.innerHTML = cart.map(i => \`
+          <div class="cart-item">
+            <div class="cart-item-info">
+              <div class="cart-item-name">\${i.emoji} \${i.name}</div>
+              <div class="cart-item-price">\${(i.price * i.qty).toFixed(3)} DT</div>
+            </div>
+            <div class="qty-controls">
+              <button class="qty-btn" onclick="changeQty(\${i.id}, -1)">−</button>
+              <span>\${i.qty}</span>
+              <button class="qty-btn" onclick="changeQty(\${i.id}, 1)">+</button>
+            </div>
+          </div>
+        \`).join('');
+        const total = cart.reduce((s, i) => s + i.price * i.qty, 0);
+        document.getElementById('cart-total').textContent = 'Total: ' + total.toFixed(3) + ' DT';
+        footerEl.style.display = 'block';
+      }
+    }
+
+    function changeQty(id, delta) {
+      const item = cart.find(i => i.id === id);
+      if (!item) return;
+      item.qty += delta;
+      if (item.qty <= 0) cart = cart.filter(i => i.id !== id);
+      updateCartUI();
+    }
+
+    function openCart() {
+      document.getElementById('cart-drawer').classList.add('open');
+      document.getElementById('overlay').style.display = 'block';
+    }
+
+    function closeCart() {
+      document.getElementById('cart-drawer').classList.remove('open');
+      document.getElementById('overlay').style.display = 'none';
+    }
+
+    function clearCart() {
+      cart = [];
+      updateCartUI();
+      showToast('🗑️ Panier vidé');
+    }
+
+    function checkout() {
+      showToast('✅ Commande passée ! Merci pour votre achat 🎉');
+      cart = [];
+      updateCartUI();
+      closeCart();
+    }
+
+    function showToast(msg) {
+      const t = document.getElementById('toast');
+      t.textContent = msg;
+      t.classList.add('show');
+      setTimeout(() => t.classList.remove('show'), 2500);
+    }
+  </script>
+</body>
+</html>`);
             }
-          });
+          }
 
-          server.listen(3000, () => console.log('App e-commerce running on port 3000'));
+          const server = http.createServer(router);
+          server.listen(3000, () => console.log('✅ TechShop Tunisia running on port 3000'));
         dest: "{{ app_dir }}/app/server.js"
         owner: "{{ app_user }}"
         group: "{{ app_user }}"
@@ -390,6 +608,9 @@
                   proxy_http_version 1.1;
                   proxy_set_header Host $host;
                   proxy_set_header X-Real-IP $remote_addr;
+                  proxy_set_header Upgrade $http_upgrade;
+                  proxy_set_header Connection 'upgrade';
+                  proxy_cache_bypass $http_upgrade;
               }
           }
         dest: /etc/nginx/sites-available/ecommerce
